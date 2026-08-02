@@ -1,0 +1,1675 @@
+﻿LeadEstate Frontend Source Code Export - Condensed
+Target: report-friendly selection, a little over 1000 lines, with large files excerpted.
+Excluded: .next, generated/build outputs, env files, screenshot helpers, static assets, and secrets.
+
+============================================================
+FILE: apps/web/src/app/layout.tsx
+============================================================
+import type { Metadata } from "next";
+import "./globals.css";
+import { cn } from "@/lib/utils";
+import { ToastProvider } from "@/components/ui/toast";
+
+export const metadata: Metadata = {
+  title: "Lead Estate",
+  description: "Lead Estate CRM dashboard",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html
+      lang="en"
+      className={cn("h-full", "antialiased", "font-sans")}
+      suppressHydrationWarning
+    >
+      <body className="min-h-full flex flex-col">
+        <ToastProvider>{children}</ToastProvider>
+      </body>
+    </html>
+  );
+}
+
+============================================================
+FILE: apps/web/src/app/login/page.tsx
+============================================================
+"use client"
+
+import { FormEvent, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { Building2, Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { ApiError, apiRequest, getFriendlyApiError } from "@/lib/api"
+import {
+  getLandingPathForUser,
+  saveAuthSession,
+  type AuthSession,
+} from "@/lib/auth"
+import { verifyStoredSession } from "@/lib/session"
+
+export default function LoginPage() {
+  const router = useRouter()
+  const [identifier, setIdentifier] = useState("")
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  useEffect(() => {
+    let isActive = true
+
+    void verifyStoredSession().then((session) => {
+      if (!isActive) {
+        return
+      }
+
+      if (session) {
+        router.replace(getLandingPathForUser(session.user))
+      }
+    })
+
+    return () => {
+      isActive = false
+    }
+  }, [router])
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError(null)
+    setIsSubmitting(true)
+
+    try {
+      const session = await apiRequest<AuthSession>("/auth/login", {
+        method: "POST",
+        body: {
+          identifier: identifier.trim(),
+          password,
+        },
+      })
+
+      saveAuthSession(session)
+      router.replace(getLandingPathForUser(session.user))
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.status === 401
+          ? "Invalid email or password."
+          : getFriendlyApiError(err, "Unable to sign in. Please try again.")
+      )
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-10">
+      <Card className="w-full max-w-md rounded-lg">
+        <CardHeader className="space-y-3">
+          <span className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Building2 className="size-6" />
+          </span>
+          <div>
+            <CardTitle className="text-2xl">Lead Estate</CardTitle>
+            <CardDescription>
+              Sign in to manage leads and follow-ups.
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div className="space-y-2">
+              <Label htmlFor="identifier">Email or username</Label>
+              <Input
+                id="identifier"
+                type="text"
+                autoComplete="username"
+                value={identifier}
+                disabled={isSubmitting}
+                onChange={(event) => setIdentifier(event.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                disabled={isSubmitting}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+            </div>
+
+            {error ? (
+              <div
+                aria-live="polite"
+                className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                {error}
+              </div>
+            ) : null}
+
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : null}
+              {isSubmitting ? "Signing in..." : "Sign in"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </main>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/page.tsx
+============================================================
+"use client"
+
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
+import { getLandingPathForUser, removeAuthSession } from "@/lib/auth"
+import { verifyStoredSession } from "@/lib/session"
+
+export default function DashboardPage() {
+  const router = useRouter()
+
+  useEffect(() => {
+    void verifyStoredSession().then((session) => {
+      if (!session) {
+        removeAuthSession()
+        router.replace("/login")
+        return
+      }
+
+      router.replace(getLandingPathForUser(session.user))
+    })
+  }, [router])
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" />
+        Opening dashboard...
+      </div>
+    </main>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/admin/page.tsx
+============================================================
+"use client"
+
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { AdminDashboardClient } from "@/components/dashboard/admin-dashboard-client"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+
+export default function AdminDashboardPage() {
+  return (
+    <ProtectedRoute allowedRoles={["ADMIN"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="Admin dashboard"
+          description="Oversee leads, assignments, and sales executive performance."
+        >
+          <AdminDashboardClient />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/sales/page.tsx
+============================================================
+"use client"
+
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { SalesDashboardClient } from "@/components/dashboard/sales-dashboard-client"
+
+export default function SalesDashboardPage() {
+  return (
+    <ProtectedRoute allowedRoles={["SALES_EXECUTIVE"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="Sales dashboard"
+          description="Your created and assigned leads, follow-ups, and current pipeline."
+        >
+          <SalesDashboardClient />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/sales/leads/page.tsx
+============================================================
+"use client"
+
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { SalesLeadsClient } from "@/components/leads/sales-leads-client"
+
+export default function SalesLeadsPage() {
+  return (
+    <ProtectedRoute allowedRoles={["SALES_EXECUTIVE"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="My Leads"
+          description="Create leads, manage follow-ups, and keep your pipeline current."
+        >
+          <SalesLeadsClient />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/sales/booking/page.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+} from "react"
+import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import {
+  DashboardEmpty,
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useToast } from "@/components/ui/toast"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken, type AuthUser } from "@/lib/auth"
+import { formatLocalDate } from "@/lib/date"
+import { getMyLeads, type Lead } from "@/lib/leads"
+import {
+  createBooking,
+  getProjectPlots,
+  getProjects,
+  type BookingType,
+  type Plot,
+  type Project,
+} from "@/lib/projects"
+
+type BookingForm = {
+  leadId: string
+  projectId: string
+  plotId: string
+  type: BookingType
+  amountPaid: string
+  bookingDate: string
+}
+
+type BookingFormErrors = Partial<Record<keyof BookingForm, string>>
+
+const initialBookingForm: BookingForm = {
+  leadId: "",
+  projectId: "",
+  plotId: "",
+  type: "BLOCKED",
+  amountPaid: "",
+  bookingDate: new Date().toISOString().slice(0, 10),
+}
+
+function createInitialBookingForm(): BookingForm {
+  if (typeof window === "undefined") {
+    return initialBookingForm
+  }
+
+  const searchParams = new URLSearchParams(window.location.search)
+
+  return {
+    ...initialBookingForm,
+    leadId: searchParams.get("leadId") ?? "",
+    type: searchParams.get("type") === "BOOKED" ? "BOOKED" : "BLOCKED",
+    bookingDate: new Date().toISOString().slice(0, 10),
+  }
+}
+
+export default function SalesBookingPage() {
+  return (
+    <ProtectedRoute allowedRoles={["SALES_EXECUTIVE"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="Complete Booking"
+          description="Confirm the project, plot, payment, and booking status."
+        >
+          <BookingClient user={user} />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/pim/page.tsx
+============================================================
+"use client"
+
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { PimDashboardClient } from "@/components/dashboard/pim-dashboard-client"
+
+export default function PimDashboardPage() {
+  return (
+    <ProtectedRoute allowedRoles={["PROJECT_INVENTORY_MANAGER"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="PIM dashboard"
+          description="Project inventory, plot status, and block lifecycle."
+        >
+          <PimDashboardClient view="overview" />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/app/dashboard/svc/page.tsx
+============================================================
+"use client"
+
+import { ProtectedRoute } from "@/components/auth/protected-route"
+import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { SvcDashboardClient } from "@/components/dashboard/svc-dashboard-client"
+
+export default function SvcDashboardPage() {
+  return (
+    <ProtectedRoute allowedRoles={["SITE_VISIT_COORDINATOR"]}>
+      {(user) => (
+        <DashboardShell
+          user={user}
+          title="SVC dashboard"
+          description="Coordinate assigned site visits, vehicles, and drivers."
+        >
+          <SvcDashboardClient view="overview" />
+        </DashboardShell>
+      )}
+    </ProtectedRoute>
+  )
+}
+
+============================================================
+FILE: apps/web/src/components/auth/protected-route.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import type { ReactNode } from "react"
+import { usePathname, useRouter } from "next/navigation"
+import { DashboardLoading } from "@/components/dashboard/dashboard-state"
+import {
+  AUTH_INVALID_EVENT,
+  getLandingPathForUser,
+  getSalesOnboardingStatus,
+  removeAuthSession,
+  type AuthUser,
+  type UserRole,
+} from "@/lib/auth"
+import { verifyStoredSession } from "@/lib/session"
+
+type ProtectedRouteProps = {
+  allowedRoles?: UserRole[]
+  children: (user: AuthUser) => ReactNode
+}
+
+export function ProtectedRoute({
+  allowedRoles,
+  children,
+}: ProtectedRouteProps) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [isChecking, setIsChecking] = useState(true)
+  const rolesKey = useMemo(() => allowedRoles?.join(",") ?? "", [allowedRoles])
+
+  useEffect(() => {
+    let isActive = true
+
+    void verifyStoredSession().then((session) => {
+      if (!isActive) {
+        return
+      }
+
+      if (!session) {
+        removeAuthSession()
+        router.replace("/login")
+        return
+      }
+
+      const freshUser = session.user
+
+      if (allowedRoles?.length && !allowedRoles.includes(freshUser.role)) {
+        router.replace(getLandingPathForUser(freshUser))
+        return
+      }
+
+      const salesOnboardingStatus =
+        freshUser.role === "SALES_EXECUTIVE"
+          ? getSalesOnboardingStatus(freshUser)
+          : null
+
+      if (
+        freshUser.role === "SALES_EXECUTIVE" &&
+        salesOnboardingStatus !== "ACTIVE" &&
+        pathname !== "/dashboard/sales/onboarding"
+      ) {
+        router.replace("/dashboard/sales/onboarding")
+        return
+      }
+
+============================================================
+FILE: apps/web/src/components/dashboard/dashboard-shell.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import Link from "next/link"
+import type { ReactNode } from "react"
+import { useState } from "react"
+import { usePathname, useRouter } from "next/navigation"
+import {
+  BarChart3,
+  Blocks,
+  Building2,
+  CalendarClock,
+  FileText,
+  LogOut,
+  Map,
+  Menu,
+  PlusCircle,
+  Shield,
+  TrendingUp,
+  Truck,
+  type LucideIcon,
+  UserRound,
+  Users,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { cn } from "@/lib/utils"
+import {
+  getDashboardPathForRole,
+  logout,
+  type AuthUser,
+} from "@/lib/auth"
+
+type DashboardShellProps = {
+  user: AuthUser
+  title: string
+  description: string
+  children: ReactNode
+}
+
+type DashboardNavItem = {
+  href: string
+  label: string
+  icon: LucideIcon
+}
+
+export function DashboardShell({
+  user,
+  title,
+  description,
+  children,
+}: DashboardShellProps) {
+  const pathname = usePathname()
+  const router = useRouter()
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false)
+  const dashboardHref = getDashboardPathForRole(user.role)
+  const roleLabel = getRoleLabel(user.role)
+  const navItems = getNavItems(user, dashboardHref)
+
+  function handleLogout() {
+    logout(router)
+  }
+
+  return (
+    <main className="min-h-screen bg-muted/30 text-foreground print:bg-background">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r bg-background print:hidden lg:block">
+        <div className="flex h-full flex-col">
+          <BrandBlock />
+
+          <nav className="flex-1 space-y-1 px-3 py-4" aria-label="Primary">
+            {navItems.map((item) => (
+              <DashboardNavLink
+                key={item.href}
+                item={item}
+
+============================================================
+FILE: apps/web/src/components/dashboard/admin-dashboard-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  BarChart3,
+  Building2,
+  CalendarDays,
+  RefreshCw,
+  Shield,
+  TrendingUp,
+  UserRound,
+} from "lucide-react"
+import { DashboardChartCard } from "@/components/dashboard/dashboard-chart-card"
+import { DashboardMetricCard } from "@/components/dashboard/dashboard-metric-card"
+import {
+  DashboardEmpty,
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import { PendingActionsCard } from "@/components/dashboard/pending-actions-card"
+import { RecentActivityCard } from "@/components/dashboard/recent-activity-card"
+import {
+  StatusBreakdownCard,
+  type StatusBreakdownItem,
+} from "@/components/dashboard/status-breakdown-card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import {
+  type AdminDashboardFilters,
+  getAdminDashboardSummary,
+  getDashboardPendingActions,
+  getDashboardRecentActivity,
+  type AdminDashboardSummary,
+  type DashboardBookingStatus,
+  type DashboardLeadStatus,
+  type DashboardLeadSource,
+  type DashboardPendingActionItem,
+  type DashboardPlotStatus,
+  type DashboardRecentActivityItem,
+} from "@/lib/dashboard"
+import { formatLocalDateTime } from "@/lib/date"
+
+const EMPTY_FILTER_VALUE = "__all"
+
+type StatusConfig<TStatus extends string> = {
+  status: TStatus
+  label: string
+  accent: string
+}
+
+const LEAD_STATUS_CONFIG: Array<StatusConfig<DashboardLeadStatus>> = [
+  { status: "NEW", label: "New", accent: "bg-sky-500" },
+  { status: "FOLLOW_UP", label: "Follow-up", accent: "bg-cyan-500" },
+  { status: "SITE_VISIT", label: "Site Visit", accent: "bg-violet-500" },
+  { status: "NEGOTIATION", label: "Negotiation", accent: "bg-indigo-500" },
+  { status: "BLOCKED", label: "Blocked", accent: "bg-amber-500" },
+  { status: "BOOKED", label: "Booked", accent: "bg-emerald-500" },
+  { status: "CANCELLED", label: "Cancelled", accent: "bg-rose-500" },
+]
+
+const BOOKING_STATUS_CONFIG: Array<StatusConfig<DashboardBookingStatus>> = [
+  { status: "ACTIVE", label: "Active", accent: "bg-emerald-500" },
+  { status: "CANCELLED", label: "Cancelled", accent: "bg-rose-500" },
+  { status: "CLOSED", label: "Closed", accent: "bg-slate-500" },
+]
+
+const PLOT_STATUS_CONFIG: Array<StatusConfig<DashboardPlotStatus>> = [
+  { status: "AVAILABLE", label: "Available", accent: "bg-teal-500" },
+  { status: "BLOCKED", label: "Blocked", accent: "bg-amber-500" },
+  { status: "BOOKED", label: "Booked", accent: "bg-emerald-500" },
+  { status: "SOLD", label: "Sold", accent: "bg-indigo-500" },
+  { status: "CANCELLED", label: "Cancelled", accent: "bg-rose-500" },
+]
+
+export function AdminDashboardClient() {
+
+============================================================
+FILE: apps/web/src/components/dashboard/sales-dashboard-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  BarChart3,
+  Building2,
+  RefreshCw,
+  Shield,
+  TrendingUp,
+  UserRound,
+} from "lucide-react"
+import { DashboardMetricCard } from "@/components/dashboard/dashboard-metric-card"
+import {
+  DashboardEmpty,
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import {
+  StatusBreakdownCard,
+  type StatusBreakdownItem,
+} from "@/components/dashboard/status-breakdown-card"
+import { Button } from "@/components/ui/button"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import {
+  getSalesDashboardSummary,
+  type DashboardBookingStatus,
+  type DashboardLeadStatus,
+  type SalesDashboardSummary,
+} from "@/lib/dashboard"
+import { formatLocalDateTime } from "@/lib/date"
+
+type StatusConfig<TStatus extends string> = {
+  status: TStatus
+  label: string
+  accent: string
+}
+
+const LEAD_STATUS_CONFIG: Array<StatusConfig<DashboardLeadStatus>> = [
+  { status: "NEW", label: "New", accent: "bg-sky-500" },
+  { status: "FOLLOW_UP", label: "Follow-up", accent: "bg-cyan-500" },
+  { status: "SITE_VISIT", label: "Site Visit", accent: "bg-violet-500" },
+  { status: "NEGOTIATION", label: "Negotiation", accent: "bg-indigo-500" },
+  { status: "BLOCKED", label: "Blocked", accent: "bg-amber-500" },
+  { status: "BOOKED", label: "Booked", accent: "bg-emerald-500" },
+  { status: "CANCELLED", label: "Cancelled", accent: "bg-rose-500" },
+]
+
+const BOOKING_STATUS_CONFIG: Array<StatusConfig<DashboardBookingStatus>> = [
+  { status: "ACTIVE", label: "Active", accent: "bg-emerald-500" },
+  { status: "CANCELLED", label: "Cancelled", accent: "bg-rose-500" },
+  { status: "CLOSED", label: "Closed", accent: "bg-slate-500" },
+]
+
+export function SalesDashboardClient() {
+  const [summary, setSummary] = useState<SalesDashboardSummary | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  const leadBreakdown = useMemo(
+    () =>
+      summary
+        ? toBreakdownItems(summary.breakdowns.leadsByStatus, LEAD_STATUS_CONFIG)
+        : [],
+    [summary]
+  )
+  const bookingBreakdown = useMemo(
+    () =>
+      summary
+        ? toBreakdownItems(
+            summary.breakdowns.bookingsByStatus,
+            BOOKING_STATUS_CONFIG
+          )
+        : [],
+    [summary]
+
+============================================================
+FILE: apps/web/src/components/dashboard/pim-dashboard-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
+import {
+  Blocks,
+  Building2,
+  LayoutDashboard,
+  Loader2,
+  Map,
+  RefreshCw,
+} from "lucide-react"
+import { DashboardMetricCard } from "@/components/dashboard/dashboard-metric-card"
+import {
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import { formatLocalDateTime } from "@/lib/date"
+import {
+  createPlot,
+  createProject,
+  getPlotBlocks,
+  getPlotPriceHistory,
+  getProjectLayout,
+  getProjects,
+  updatePlotPrice,
+  updatePlotStatus,
+  updateProjectLayout,
+  updateProject,
+  type CreatePlotInput,
+  type Plot,
+  type PlotBlock,
+  type PlotPriceHistory,
+  type PlotStatus,
+  type Project,
+} from "@/lib/projects"
+
+const PLOT_STATUSES: PlotStatus[] = [
+  "AVAILABLE",
+  "BLOCKED",
+  "BOOKED",
+  "SOLD",
+  "CANCELLED",
+]
+
+type PlotFormState = {
+  plotNumber: string
+  size: string
+  facing: string
+  price: string
+  status: PlotStatus
+}
+
+type PimDashboardView = "overview" | "projects" | "plots" | "blocks"
+
+const initialPlotForm: PlotFormState = {
+  plotNumber: "",
+  size: "",
+
+============================================================
+FILE: apps/web/src/components/dashboard/svc-dashboard-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import {
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react"
+import {
+  CalendarClock,
+  CheckCircle2,
+  Clock3,
+  Loader2,
+  RefreshCw,
+  Truck,
+  UserRound,
+} from "lucide-react"
+import { DashboardMetricCard } from "@/components/dashboard/dashboard-metric-card"
+import {
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import { createCustomer, getCustomers, type Customer } from "@/lib/customers"
+import { formatLocalDateTime } from "@/lib/date"
+import type { Project } from "@/lib/projects"
+import { getProjects } from "@/lib/projects"
+import {
+  cancelSiteVisit,
+  completeSiteVisit,
+  createDriver,
+  createSiteVisit,
+  createVehicle,
+  getDrivers,
+  getSiteVisits,
+  getVehicles,
+  startSiteVisit,
+  type Driver,
+  type SiteVisit,
+  type SiteVisitStatus,
+  type Vehicle,
+} from "@/lib/site-visits"
+import { getSalesExecutives } from "@/lib/users"
+import type { AuthUser } from "@/lib/auth"
+
+const EMPTY_SELECT_VALUE = "__none"
+const NEW_CUSTOMER_VALUE = "__new"
+const VISIT_STATUSES: SiteVisitStatus[] = [
+  "SCHEDULED",
+  "STARTED",
+  "COMPLETED",
+  "CANCELLED",
+]
+
+type VisitFormState = {
+  customerId: string
+  customerName: string
+  customerPhone: string
+  customerEmail: string
+  projectId: string
+  vehicleId: string
+  driverId: string
+  assignedToId: string
+  scheduledAt: string
+
+============================================================
+FILE: apps/web/src/components/leads/lead-form.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { FormEvent, useId, useState } from "react"
+import type { ReactNode } from "react"
+import { Loader2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import type { AuthUser } from "@/lib/auth"
+import { toDateInputValue } from "@/lib/date"
+import {
+  LEAD_SOURCES,
+  type Lead,
+  type LeadFormInput,
+  type LeadSource,
+} from "@/lib/leads"
+
+const EMPTY_SELECT_VALUE = "__empty"
+
+type LeadFormProps = {
+  lead?: Lead | null
+  salesUsers?: AuthUser[]
+  showAssignment?: boolean
+  showSource?: boolean
+  defaultSource?: LeadSource
+  isSubmitting: boolean
+  submitLabel: string
+  onSubmit: (input: LeadFormInput) => Promise<void>
+}
+
+type FormState = {
+  fullName: string
+  phone: string
+  email: string
+  propertyType: string
+  budget: string
+  location: string
+  source: LeadSource | typeof EMPTY_SELECT_VALUE
+  notes: string
+  remarks: string
+  followUpDate: string
+  assignedToId: string
+}
+
+type FieldErrors = Partial<Record<keyof FormState, string>>
+
+function createInitialState(
+  lead?: Lead | null,
+  defaultSource?: LeadSource
+): FormState {
+  return {
+    fullName: lead?.fullName ?? "",
+    phone: lead?.phone ?? "",
+    email: lead?.email ?? "",
+    propertyType: lead?.propertyType ?? "",
+    budget: lead?.budget ?? "",
+    location: lead?.location ?? "",
+    source: lead
+      ? lead.source ?? EMPTY_SELECT_VALUE
+      : defaultSource ?? EMPTY_SELECT_VALUE,
+    notes: lead?.notes ?? "",
+    remarks: lead?.remarks ?? "",
+    followUpDate: toDateInputValue(lead?.followUpDate),
+    assignedToId: lead?.assignedToId ?? EMPTY_SELECT_VALUE,
+  }
+}
+
+export function LeadForm({
+  lead,
+  salesUsers = [],
+  showAssignment = false,
+  showSource = true,
+  defaultSource,
+  isSubmitting,
+  submitLabel,
+  onSubmit,
+}: LeadFormProps) {
+  const formId = useId()
+  const [form, setForm] = useState<FormState>(() =>
+    createInitialState(lead, defaultSource)
+  )
+  const [errors, setErrors] = useState<FieldErrors>({})
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const nextErrors = validateForm(form)
+    setErrors(nextErrors)
+
+    if (Object.keys(nextErrors).length > 0) {
+      return
+    }
+
+============================================================
+FILE: apps/web/src/components/leads/sales-leads-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { Loader2, Plus, RefreshCw } from "lucide-react"
+import {
+  DashboardEmpty,
+  DashboardError,
+} from "@/components/dashboard/dashboard-state"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/components/ui/toast"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import {
+  formatLocalDate,
+  formatLocalDateTime,
+  toDateInputValue,
+} from "@/lib/date"
+import {
+  createLead,
+  getMyLeads,
+  LEAD_STATUSES,
+  type Lead,
+  type LeadFormInput,
+  type LeadProgressInput,
+  type LeadStatus,
+  updateLeadStatus,
+} from "@/lib/leads"
+import { getProjects, type Project } from "@/lib/projects"
+import { LeadForm } from "./lead-form"
+import { LeadStatusBadge } from "./lead-status-badge"
+
+type LeadEditState = Required<Pick<LeadProgressInput, "status">> &
+  Pick<LeadProgressInput, "followUpDate" | "remarks" | "interestedProjectIds">
+
+export function SalesLeadsClient() {
+  const [leads, setLeads] = useState<Lead[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [leadEdits, setLeadEdits] = useState<Record<string, LeadEditState>>({})
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savingLeadId, setSavingLeadId] = useState<string | null>(null)
+  const [bookingLeadId, setBookingLeadId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const router = useRouter()
+  const token = useMemo(() => getToken(), [])
+  const toast = useToast()
+
+  const loadLeads = useCallback(async (showTableLoading = false) => {
+    if (!token) {
+      setError("Your session has expired. Please log in again.")
+
+============================================================
+FILE: apps/web/src/components/reports/admin-reports-client.tsx
+============================================================
+NOTE: Only important section included.
+
+"use client"
+
+import { useCallback, useEffect, useId, useMemo, useState } from "react"
+import type { FormEvent, ReactNode } from "react"
+import {
+  Banknote,
+  CalendarDays,
+  Download,
+  FileText,
+  Printer,
+  RefreshCw,
+  Users,
+} from "lucide-react"
+import { DashboardMetricCard } from "@/components/dashboard/dashboard-metric-card"
+import {
+  DashboardEmpty,
+  DashboardError,
+  DashboardLoading,
+} from "@/components/dashboard/dashboard-state"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import { useToast } from "@/components/ui/toast"
+import { getFriendlyApiError } from "@/lib/api"
+import { getToken } from "@/lib/auth"
+import { formatLocalDate, formatLocalDateTime, toDateInputValue } from "@/lib/date"
+import {
+  downloadReportCsv,
+  getBookingReport,
+  getLeadReport,
+  getSalesPerformanceReport,
+  type BookingReportResponse,
+  type LeadReportResponse,
+  type ReportDateFilters,
+  type ReportExportKind,
+  type SalesPerformanceReportResponse,
+} from "@/lib/reports"
+
+const currencyFormatter = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 0,
+})
+
+const numberFormatter = new Intl.NumberFormat("en-IN")
+
+export function AdminReportsClient() {
+  const initialFilters = useMemo(() => getInitialFilters(), [])
+  const formId = useId()
+  const filterErrorId = `${formId}-date-range-error`
+  const toast = useToast()
+  const [draftFilters, setDraftFilters] =
+    useState<ReportDateFilters>(initialFilters)
+  const [appliedFilters, setAppliedFilters] =
+    useState<ReportDateFilters>(initialFilters)
+  const [leadReport, setLeadReport] = useState<LeadReportResponse | null>(null)
+  const [bookingReport, setBookingReport] =
+    useState<BookingReportResponse | null>(null)
+
+============================================================
+FILE: apps/web/src/lib/api.ts
+============================================================
+NOTE: Only important section included.
+
+import { getToken, invalidateAuthSession } from "@/lib/auth"
+
+export const API_URL = (
+  process.env.NEXT_PUBLIC_API_URL?.trim() || "http://localhost:4000"
+).replace(/\/+$/, "")
+
+type ApiRequestOptions = Omit<RequestInit, "body"> & {
+  body?: unknown
+  token?: string | null
+}
+
+type ApiErrorResponse = {
+  message?: string | string[]
+  error?: string
+}
+
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+  }
+}
+
+export async function apiRequest<T>(
+  path: string,
+  options: ApiRequestOptions = {}
+): Promise<T> {
+  const requestPath = path.startsWith("/") ? path : `/${path}`
+  const requestToken = options.token
+  const headers = new Headers(options.headers)
+
+  if (!headers.has("Content-Type") && options.body !== undefined) {
+    headers.set("Content-Type", "application/json")
+  }
+
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json")
+  }
+
+  if (requestToken) {
+    headers.set("Authorization", `Bearer ${requestToken}`)
+  }
+
+  let response: Response
+
+  try {
+    response = await fetch(`${API_URL}${requestPath}`, {
+      ...options,
+      headers,
+      body:
+        options.body === undefined || options.body instanceof FormData
+          ? options.body
+          : JSON.stringify(options.body),
+    })
+  } catch {
+    throw new ApiError(
+      `API unavailable at ${API_URL}. Start the backend or check NEXT_PUBLIC_API_URL.`,
+      0
+    )
+  }
+
+  const data = await parseResponse(response)
+
+  if (!response.ok) {
+    if (
+      requestToken &&
+      isUnauthorized(response.status) &&
+      getToken() === requestToken
+    ) {
+      invalidateAuthSession()
+    }
+
+    throw new ApiError(
+      getErrorMessage(data, response.statusText),
+      response.status
+    )
+  }
+
+============================================================
+FILE: apps/web/src/lib/auth.ts
+============================================================
+NOTE: Only important section included.
+
+export type UserRole =
+  | "ADMIN"
+  | "SALES_EXECUTIVE"
+  | "PROJECT_INVENTORY_MANAGER"
+  | "SITE_VISIT_COORDINATOR"
+
+export type OnboardingStatus =
+  | "CREATED"
+  | "PENDING_ADMIN_APPROVAL"
+  | "PROFILE_INCOMPLETE"
+  | "PASSWORD_CHANGE_REQUIRED"
+  | "ACTIVE"
+  | "REJECTED"
+
+export type Gender = "MALE" | "FEMALE" | "OTHER" | "PREFER_NOT_TO_SAY"
+
+export type AuthUser = {
+  id: string
+  name: string
+  email: string
+  role: UserRole
+  seId?: string | null
+  username?: string | null
+  firstName?: string | null
+  lastName?: string | null
+  phoneNumber?: string | null
+  dob?: string | null
+  gender?: Gender | null
+  onboardingStatus?: OnboardingStatus
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type AuthSession = {
+  accessToken: string
+  user: AuthUser
+}
+
+const TOKEN_KEY = "lead-estate-token"
+const USER_KEY = "lead-estate-user"
+export const AUTH_INVALID_EVENT = "lead-estate-auth-invalid"
+const onboardingStatuses: OnboardingStatus[] = [
+  "CREATED",
+  "PENDING_ADMIN_APPROVAL",
+  "PROFILE_INCOMPLETE",
+  "PASSWORD_CHANGE_REQUIRED",
+  "ACTIVE",
+  "REJECTED",
+]
+
+export function saveAuthSession(session: AuthSession) {
+  if (!isBrowser()) {
+    return
+  }
+
+  localStorage.setItem(TOKEN_KEY, session.accessToken)
+  localStorage.setItem(USER_KEY, JSON.stringify(session.user))
+}
+
+export function getToken() {
+
+============================================================
+FILE: apps/web/src/lib/leads.ts
+============================================================
+NOTE: Only important section included.
+
+import { apiRequest } from "@/lib/api"
+
+export type LeadStatus =
+  | "NEW"
+  | "FOLLOW_UP"
+  | "SITE_VISIT"
+  | "NEGOTIATION"
+  | "BLOCKED"
+  | "BOOKED"
+  | "CANCELLED"
+
+export type LeadSource =
+  | "SE_GENERATED"
+  | "ADMIN_GENERATED"
+  | "WEBSITE"
+  | "REFERRAL"
+  | "WALK_IN"
+  | "PHONE_CALL"
+  | "SOCIAL_MEDIA"
+  | "OTHER"
+
+export type LeadUser = {
+  id: string
+  name: string
+  email: string
+  role:
+    | "ADMIN"
+    | "SALES_EXECUTIVE"
+    | "PROJECT_INVENTORY_MANAGER"
+    | "SITE_VISIT_COORDINATOR"
+}
+
+export type LeadProject = {
+  id: string
+  projectName: string
+  location: string
+}
+
+export type LeadPlot = {
+  id: string
+  plotNumber: string
+  size?: string | null
+  facing?: string | null
+  price?: string | number | null
+  status?: string
+}
+
+export type LeadBooking = {
+  id: string
+  type: "BOOKED" | "BLOCKED"
+  amountPaid?: string | number | null
+  bookingDate: string
+  project?: LeadProject | null
+  plot?: LeadPlot | null
+  salesExecutive?: Pick<LeadUser, "id" | "name" | "email"> | null
+
+============================================================
+FILE: apps/web/src/lib/customers.ts
+============================================================
+import { apiRequest } from "@/lib/api"
+import type { LeadUser } from "@/lib/leads"
+
+export type CustomerJourneyStatus = "PROSPECT" | "CUSTOMER" | "LOST"
+
+export type Customer = {
+  id: string
+  fullName: string
+  phone: string
+  email?: string | null
+  status: CustomerJourneyStatus
+  notes?: string | null
+  assignedToId?: string | null
+  assignedTo?: LeadUser | null
+  createdById?: string | null
+  createdBy?: LeadUser | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateCustomerInput = {
+  fullName: string
+  phone: string
+  email?: string
+  status?: CustomerJourneyStatus
+  notes?: string
+  assignedToId?: string
+}
+
+export function getCustomers(token: string) {
+  return apiRequest<Customer[]>("/customers", { token })
+}
+
+export function createCustomer(token: string, input: CreateCustomerInput) {
+  return apiRequest<Customer>("/customers", {
+    method: "POST",
+    token,
+    body: cleanInput(input),
+  })
+}
+
+function cleanInput(input: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(input)
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? value.trim() : value,
+      ])
+      .filter(([, value]) => value !== "" && value !== undefined)
+  )
+}
+
+============================================================
+FILE: apps/web/src/lib/projects.ts
+============================================================
+NOTE: Only important section included.
+
+import { apiRequest } from "@/lib/api"
+import type { Lead, LeadProject, LeadUser } from "@/lib/leads"
+
+export type PlotStatus =
+  | "AVAILABLE"
+  | "BLOCKED"
+  | "BOOKED"
+  | "SOLD"
+  | "CANCELLED"
+export type BookingType = "BOOKED" | "BLOCKED"
+export type PlotBlockStatus = "ACTIVE" | "CANCELLED" | "EXPIRED" | "CONVERTED"
+
+export type Plot = {
+  id: string
+  plotNumber: string
+  projectId: string
+  size?: string | null
+  facing?: string | null
+  price?: string | number | null
+  status: PlotStatus
+  createdAt: string
+  updatedAt: string
+}
+
+export type Project = LeadProject & {
+  description?: string | null
+  totalPlots?: number | null
+  plots?: Plot[]
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateProjectInput = {
+  projectName: string
+  location: string
+  description?: string
+  totalPlots?: string | number
+}
+
+export type CreatePlotInput = {
+  plotNumber: string
+  size?: string
+  facing?: string
+  price?: string | number
+  status?: PlotStatus
+}
+
+export type UpdateProjectInput = Partial<CreateProjectInput>
+
+export type UpdatePlotStatusInput = {
+  status: PlotStatus
+}
+
+export type UpdatePlotPriceInput = {
+  newPrice: string | number
+
+============================================================
+FILE: apps/web/src/lib/site-visits.ts
+============================================================
+NOTE: Only important section included.
+
+import { apiRequest } from "@/lib/api"
+import type { LeadProject, LeadUser } from "@/lib/leads"
+
+export type SiteVisitStatus = "SCHEDULED" | "STARTED" | "COMPLETED" | "CANCELLED"
+
+export type Vehicle = {
+  id: string
+  registrationNumber: string
+  name?: string | null
+  type?: string | null
+  capacity?: number | null
+  notes?: string | null
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type Driver = {
+  id: string
+  fullName: string
+  phone: string
+  licenseNumber?: string | null
+  notes?: string | null
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type SiteVisit = {
+  id: string
+  scheduledAt: string
+  status: SiteVisitStatus
+  startedAt?: string | null
+  completedAt?: string | null
+  cancelledAt?: string | null
+  cancellationReason?: string | null
+  outcomeNotes?: string | null
+  notes?: string | null
+  lead?: {
+    id: string
+    fullName: string
+    phone: string
+    status: string
+  } | null
+  customer?: {
+    id: string
+    fullName: string
+    phone: string
+    status: string
+  } | null
+
+============================================================
+FILE: apps/web/src/lib/reports.ts
+============================================================
+NOTE: Only important section included.
+
+import { API_URL, ApiError, apiRequest } from "@/lib/api"
+import type { LeadSource, LeadStatus } from "@/lib/leads"
+
+export type ReportDateFilters = {
+  from?: string
+  to?: string
+}
+
+export type ReportFilters = {
+  from: string | null
+  to: string | null
+}
+
+export type ReportCountRecord<TStatus extends string> = Record<TStatus, number>
+
+export type ReportLeadSource = LeadSource | "UNSPECIFIED"
+
+export type LeadReportItem = {
+  id: string
+  fullName: string
+  phone: string
+  email: string | null
+  status: LeadStatus
+  source: ReportLeadSource | null
+  propertyType: string | null
+  budget: string | null
+  location: string | null
+  assignedTo: ReportPerson | null
+  createdBy: ReportPerson | null
+  finalProject: {
+    id: string
+    projectName: string
+    location: string
+  } | null
+  finalPlot: {
+    id: string
+    plotNumber: string
+  } | null
+  bookingAmount: string | null
+  bookingDate: string | null
+  followUpDate: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type LeadReportResponse = {
+  generatedAt: string
+  filters: ReportFilters
+  totals: {
+    total: number
+
+

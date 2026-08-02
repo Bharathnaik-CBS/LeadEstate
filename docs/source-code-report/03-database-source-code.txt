@@ -1,0 +1,701 @@
+﻿LeadEstate Database Source Code Export - Condensed
+Included: Prisma schema and sanitized seed excerpt.
+Note: There are fewer than 1000 safe database-source lines without adding generated files, migration SQL dumps, or duplicate padding.
+
+============================================================
+FILE: apps/api/prisma/schema.prisma
+============================================================
+// This is your Prisma schema file
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  SALES_EXECUTIVE
+  PROJECT_INVENTORY_MANAGER
+  SITE_VISIT_COORDINATOR
+}
+
+enum OnboardingStatus {
+  CREATED
+  PENDING_ADMIN_APPROVAL
+  PROFILE_INCOMPLETE
+  PASSWORD_CHANGE_REQUIRED
+  ACTIVE
+  REJECTED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum LeadStatus {
+  NEW
+  FOLLOW_UP
+  SITE_VISIT
+  NEGOTIATION
+  BLOCKED
+  BOOKED
+  CANCELLED
+}
+
+enum CustomerJourneyStatus {
+  PROSPECT
+  CUSTOMER
+  LOST
+}
+
+enum FollowUpStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum LeadSource {
+  SE_GENERATED
+  ADMIN_GENERATED
+  WEBSITE
+  REFERRAL
+  WALK_IN
+  PHONE_CALL
+  SOCIAL_MEDIA
+  OTHER
+}
+
+enum PlotStatus {
+  AVAILABLE
+  BLOCKED
+  BOOKED
+  SOLD
+  CANCELLED
+}
+
+enum BookingType {
+  BLOCKED
+  BOOKED
+}
+
+enum BookingStatus {
+  ACTIVE
+  CANCELLED
+  CLOSED
+}
+
+enum PlotBlockStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  CONVERTED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  UPI
+  CHEQUE
+  CARD
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum BookingKycStatus {
+  NOT_STARTED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum SiteVisitStatus {
+  SCHEDULED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+model User {
+  id                  String           @id @default(uuid())
+  name                String
+  email               String           @unique
+  password            String
+  role                UserRole         @default(SALES_EXECUTIVE)
+  seId                String?          @unique
+  username            String?          @unique
+  firstName           String?
+  lastName            String?
+  phoneNumber         String?
+  dob                 DateTime?
+  gender              Gender?
+  onboardingStatus    OnboardingStatus @default(PENDING_ADMIN_APPROVAL)
+  passwordResetOtp    String?
+  passwordResetOtpExp DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  assignedLeads     Lead[]           @relation("LeadAssignedTo")
+  createdLeads      Lead[]           @relation("LeadCreatedBy")
+  bookings          Booking[]        @relation("BookingSalesExecutive")
+  assignedCustomers Customer[]       @relation("CustomerAssignedTo")
+  createdCustomers  Customer[]       @relation("CustomerCreatedBy")
+  assignedFollowUps FollowUp[]       @relation("FollowUpAssignedTo")
+  createdFollowUps  FollowUp[]       @relation("FollowUpCreatedBy")
+  plotBlocksBlocked PlotBlock[]      @relation("PlotBlockBlockedBy")
+  receivedPayments  BookingPayment[] @relation("BookingPaymentReceivedBy")
+  verifiedKycs      BookingKyc[]     @relation("BookingKycVerifiedBy")
+  rejectedKycs      BookingKyc[]     @relation("BookingKycRejectedBy")
+  cancelledBookings Booking[]        @relation("BookingCancelledBy")
+  closedBookings    Booking[]        @relation("BookingClosedBy")
+  assignedSiteVisits SiteVisit[]      @relation("SiteVisitAssignedTo")
+  createdSiteVisits  SiteVisit[]      @relation("SiteVisitCreatedBy")
+  startedSiteVisits  SiteVisit[]      @relation("SiteVisitStartedBy")
+  completedSiteVisits SiteVisit[]     @relation("SiteVisitCompletedBy")
+  cancelledSiteVisits SiteVisit[]     @relation("SiteVisitCancelledBy")
+  activityEvents      ActivityEvent[] @relation("ActivityEventActor")
+}
+
+model Lead {
+  id                   String                  @id @default(uuid())
+  fullName             String
+  phone                String
+  email                String?
+  propertyType         String?
+  budget               String?
+  location             String?
+  source               LeadSource?
+  status               LeadStatus              @default(NEW)
+  notes                String?
+  remarks              String?
+  followUpDate         DateTime?
+  interestedProjectIds String[]                @default([])
+  finalProjectId       String?
+  finalProject         Project?                @relation("LeadFinalProject", fields: [finalProjectId], references: [id], onDelete: SetNull)
+  finalPlotId          String?
+  finalPlot            Plot?                   @relation("LeadFinalPlot", fields: [finalPlotId], references: [id], onDelete: SetNull)
+  platformId           String?
+  platform             Platform?               @relation(fields: [platformId], references: [id], onDelete: SetNull)
+  bookingAmount        Decimal?                @db.Decimal(12, 2)
+  bookingDate          DateTime?
+  bookings             Booking[]
+  customer             Customer?               @relation("LeadCustomerRecord")
+  followUps            FollowUp[]
+  siteVisits           SiteVisit[]
+  interestedProjects   LeadInterestedProject[]
+  createdById          String?
+  createdBy            User?                   @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedToId         String?
+  assignedTo           User?                   @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@index([status])
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([finalProjectId])
+  @@index([finalPlotId])
+  @@index([platformId])
+}
+
+model Customer {
+  id          String                @id @default(uuid())
+  fullName    String
+  phone       String
+  email       String?
+  status      CustomerJourneyStatus @default(PROSPECT)
+  notes       String?
+  convertedAt DateTime?
+
+  sourceLeadId String? @unique
+  sourceLead   Lead?   @relation("LeadCustomerRecord", fields: [sourceLeadId], references: [id], onDelete: SetNull)
+
+  assignedToId String?
+  assignedTo   User?   @relation("CustomerAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  followUps  FollowUp[]
+  plotBlocks PlotBlock[]
+  bookings   Booking[]
+  siteVisits SiteVisit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([phone])
+  @@index([assignedToId])
+  @@index([createdById])
+}
+
+model FollowUp {
+  id          String         @id @default(uuid())
+  dueAt       DateTime
+  status      FollowUpStatus @default(PENDING)
+  notes       String?
+  completedAt DateTime?
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  assignedToId String?
+  assignedTo   User?   @relation("FollowUpAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, dueAt])
+  @@index([assignedToId, dueAt])
+  @@index([leadId])
+  @@index([customerId])
+  @@index([createdById])
+}
+
+model Platform {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  leads     Lead[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Project {
+  id              String                  @id @default(uuid())
+  projectName     String
+  location        String
+  description     String?
+  totalPlots      Int?
+  plots           Plot[]
+  layout          ProjectLayout?
+  bookings        Booking[]
+  plotBlocks      PlotBlock[]
+  siteVisits      SiteVisit[]
+  finalLeads      Lead[]                  @relation("LeadFinalProject")
+  interestedLeads LeadInterestedProject[]
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+}
+
+model ProjectLayout {
+  id         String   @id @default(uuid())
+  projectId  String   @unique
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  layoutJson Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model LeadInterestedProject {
+  leadId    String
+  projectId String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([leadId, projectId])
+  @@index([projectId])
+}
+
+model Plot {
+  id           String             @id @default(uuid())
+  plotNumber   String
+  projectId    String
+  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  size         String?
+  facing       String?
+  price        Decimal?           @db.Decimal(12, 2)
+  status       PlotStatus         @default(AVAILABLE)
+  bookings     Booking[]
+  blocks       PlotBlock[]
+  finalLeads   Lead[]             @relation("LeadFinalPlot")
+  priceHistory PlotPriceHistory[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([id, projectId], map: "Plot_id_projectId_key")
+  @@unique([projectId, plotNumber])
+  @@index([projectId])
+  @@index([status])
+}
+
+model PlotPriceHistory {
+  id          String   @id @default(uuid())
+  plotId      String
+  plot        Plot     @relation(fields: [plotId], references: [id], onDelete: Cascade)
+  oldPrice    Decimal? @db.Decimal(12, 2)
+  newPrice    Decimal  @db.Decimal(12, 2)
+  changedById String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([plotId, createdAt])
+}
+
+model PlotBlock {
+  id                 String          @id @default(uuid())
+  projectId          String
+  project            Project         @relation(fields: [projectId], references: [id])
+  plotId             String
+  plot               Plot            @relation(fields: [plotId], references: [id])
+  customerId         String
+  customer           Customer        @relation(fields: [customerId], references: [id])
+  blockedById        String
+  blockedBy          User            @relation("PlotBlockBlockedBy", fields: [blockedById], references: [id])
+  status             PlotBlockStatus @default(ACTIVE)
+  blockedAt          DateTime        @default(now())
+  expiresAt          DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  convertedAt        DateTime?
+  booking            Booking?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([plotId])
+  @@index([customerId])
+  @@index([blockedById])
+  @@index([status])
+  @@index([plotId, status])
+}
+
+model Booking {
+  id                 String           @id @default(uuid())
+  type               BookingType
+  status             BookingStatus    @default(ACTIVE)
+  amountPaid         Decimal?         @db.Decimal(12, 2)
+  bookingDate        DateTime         @default(now())
+  leadId             String?
+  lead               Lead?            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  customerId         String?
+  customer           Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  projectId          String
+  project            Project          @relation(fields: [projectId], references: [id])
+  plotId             String
+  plot               Plot             @relation(fields: [plotId], references: [id])
+  plotBlockId        String?          @unique
+  plotBlock          PlotBlock?       @relation(fields: [plotBlockId], references: [id], onDelete: SetNull)
+  salesExecutiveId   String
+  salesExecutive     User             @relation("BookingSalesExecutive", fields: [salesExecutiveId], references: [id])
+  cancelledAt        DateTime?
+  cancellationReason String?
+  cancelledById      String?
+  cancelledBy        User?            @relation("BookingCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  closedAt           DateTime?
+  closedById         String?
+  closedBy           User?            @relation("BookingClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  closureNotes       String?
+  payments           BookingPayment[]
+  kyc                BookingKyc?
+  siteVisits         SiteVisit[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([leadId])
+  @@index([customerId])
+  @@index([projectId])
+  @@index([plotId])
+  @@index([salesExecutiveId])
+  @@index([status])
+  @@index([cancelledById])
+  @@index([closedById])
+}
+
+model BookingPayment {
+  id              String        @id @default(uuid())
+  bookingId       String
+  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  receivedById    String?
+  receivedBy      User?         @relation("BookingPaymentReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+  amount          Decimal       @db.Decimal(12, 2)
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  paidAt          DateTime?
+  referenceNumber String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([bookingId])
+  @@index([receivedById])
+  @@index([status])
+  @@index([method])
+  @@index([paidAt])
+}
+
+model BookingKyc {
+  id              String           @id @default(uuid())
+  bookingId       String           @unique
+  booking         Booking          @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  status          BookingKycStatus @default(NOT_STARTED)
+  submittedAt     DateTime?
+  verifiedAt      DateTime?
+  verifiedById    String?
+  verifiedBy      User?            @relation("BookingKycVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+  rejectedAt      DateTime?
+  rejectedById    String?
+  rejectedBy      User?            @relation("BookingKycRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  rejectionReason String?
+  notes           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([verifiedById])
+  @@index([rejectedById])
+  @@index([status])
+}
+
+model Vehicle {
+  id                 String      @id @default(uuid())
+  registrationNumber String      @unique
+  name               String?
+  type               String?
+  capacity           Int?
+  notes              String?
+  isActive           Boolean     @default(true)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  siteVisits         SiteVisit[]
+}
+
+model Driver {
+  id            String      @id @default(uuid())
+  fullName      String
+  phone         String
+  licenseNumber String?     @unique
+  notes         String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  siteVisits    SiteVisit[]
+}
+
+model SiteVisit {
+  id                 String          @id @default(uuid())
+  scheduledAt        DateTime
+  status             SiteVisitStatus @default(SCHEDULED)
+  startedAt          DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  outcomeNotes       String?
+  notes              String?
+
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  bookingId String?
+  booking   Booking? @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+
+  vehicleId String?
+  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+
+  driverId String?
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  assignedToId String?
+  assignedTo   User?   @relation("SiteVisitAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("SiteVisitCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  startedById String?
+  startedBy   User?   @relation("SiteVisitStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+
+  completedById String?
+  completedBy   User?   @relation("SiteVisitCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+
+  cancelledById String?
+  cancelledBy   User?   @relation("SiteVisitCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@index([leadId])
+  @@index([customerId])
+  @@index([projectId])
+  @@index([bookingId])
+  @@index([assignedToId])
+  @@index([vehicleId])
+  @@index([driverId])
+}
+
+model ActivityEvent {
+  id         String   @id @default(uuid())
+  action     String
+  targetType String
+  targetId   String
+  actorId    String?
+  actor      User?    @relation("ActivityEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  metadata   Json?
+  occurredAt DateTime @default(now())
+
+  @@index([targetType, targetId, occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([action, occurredAt])
+  @@index([occurredAt])
+}
+
+============================================================
+FILE: apps/api/prisma/seed.ts
+============================================================
+NOTE: Local development admin password fallback redacted for report safety.
+
+import { PrismaPg } from '@prisma/adapter-pg';
+import { hash } from 'bcryptjs';
+import {
+  OnboardingStatus,
+  PrismaClient,
+  UserRole,
+} from '../src/generated/prisma/client';
+
+const LOCAL_ADMIN_EMAIL = 'admin@leadestate.local';
+const LOCAL_ADMIN_PASSWORD = '[REDACTED_LOCAL_ADMIN_PASSWORD]';
+const MIN_ADMIN_PASSWORD_LENGTH = 12;
+const DEFAULT_PLATFORMS = [
+  'Direct Visit',
+  'Phone Call',
+  'Website',
+  'Facebook',
+  'Instagram',
+  'Referral',
+  'WhatsApp',
+  'Other',
+];
+
+function getAdminSeedUser() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const configuredEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const configuredPassword = process.env.ADMIN_PASSWORD?.trim();
+  const name = process.env.ADMIN_NAME?.trim() || 'Admin User';
+
+  if (isProduction) {
+    if (!configuredEmail) {
+      throw new Error('ADMIN_EMAIL is required when seeding production');
+    }
+
+    if (!isStrongAdminPassword(configuredPassword)) {
+      throw new Error(
+        `ADMIN_PASSWORD is required when seeding production and must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`,
+      );
+    }
+
+    return {
+      name,
+      email: configuredEmail,
+      password: configuredPassword,
+      role: UserRole.ADMIN,
+    };
+  }
+
+  if (!configuredEmail) {
+    console.warn(`Using local development admin email: ${LOCAL_ADMIN_EMAIL}`);
+  }
+
+  return {
+    name,
+    email: configuredEmail || LOCAL_ADMIN_EMAIL,
+    password: configuredPassword || LOCAL_ADMIN_PASSWORD,
+    role: UserRole.ADMIN,
+  };
+}
+
+function isStrongAdminPassword(password?: string): password is string {
+  return Boolean(
+    password &&
+      password.length >= MIN_ADMIN_PASSWORD_LENGTH &&
+      password !== LOCAL_ADMIN_PASSWORD,
+  );
+}
+
+async function main() {
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL is missing. Check apps/api/.env');
+  }
+
+  const adapter = new PrismaPg({
+    connectionString: databaseUrl,
+  });
+  const prisma = new PrismaClient({ adapter });
+
+  try {
+    const adminUser = getAdminSeedUser();
+    const passwordHash = await hash(adminUser.password, 10);
+    const user = await prisma.user.upsert({
+      where: {
+        email: adminUser.email,
+      },
+      update: {
+        name: adminUser.name,
+        role: adminUser.role,
+        onboardingStatus: OnboardingStatus.ACTIVE,
+      },
+      create: {
+        name: adminUser.name,
+        email: adminUser.email,
+        password: passwordHash,
+        role: adminUser.role,
+        onboardingStatus: OnboardingStatus.ACTIVE,
+      },
+    });
+
+    console.log(`Seeded admin user: ${user.email} (${user.role})`);
+
+    await Promise.all(
+      DEFAULT_PLATFORMS.map((name) =>
+        prisma.platform.upsert({
+          where: {
+            name,
+          },
+          update: {},
+          create: {
+            name,
+          },
+        }),
+      ),
+    );
+
+    console.log(`Seeded ${DEFAULT_PLATFORMS.length} default platforms`);
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+

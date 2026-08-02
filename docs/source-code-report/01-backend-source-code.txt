@@ -1,0 +1,1527 @@
+﻿LeadEstate Backend Source Code Export - Condensed
+Target: report-friendly selection, a little over 1000 lines, with large files excerpted.
+Excluded: generated Prisma client, tests, migrations, lock files, env files, secrets, and build outputs.
+
+============================================================
+FILE: apps/api/src/main.ts
+============================================================
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3001',
+];
+
+const configuredAllowedOrigins = (process.env.CORS_ORIGIN ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const allowedOrigins = Array.from(
+  new Set([...defaultAllowedOrigins, ...configuredAllowedOrigins]),
+);
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.enableCors({
+    origin: allowedOrigins,
+  });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+  await app.listen(process.env.PORT ?? 4000);
+}
+void bootstrap();
+
+============================================================
+FILE: apps/api/src/app.module.ts
+============================================================
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { ActivityEventsModule } from './activity-events/activity-events.module';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { AuthModule } from './auth/auth.module';
+import { BookingsModule } from './bookings/bookings.module';
+import { CustomersModule } from './customers/customers.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { DriversModule } from './drivers/drivers.module';
+import { FollowUpsModule } from './follow-ups/follow-ups.module';
+import { LeadsModule } from './leads/leads.module';
+import { PlatformsModule } from './platforms/platforms.module';
+import { PrismaModule } from './prisma/prisma.module';
+import { ProjectsModule } from './projects/projects.module';
+import { ReportsModule } from './reports/reports.module';
+import { SiteVisitsModule } from './site-visits/site-visits.module';
+import { UsersModule } from './users/users.module';
+import { VehiclesModule } from './vehicles/vehicles.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', 'apps/api/.env'],
+    }),
+    ActivityEventsModule,
+    AuthModule,
+    BookingsModule,
+    CustomersModule,
+    DashboardModule,
+    DriversModule,
+    FollowUpsModule,
+    LeadsModule,
+    PlatformsModule,
+    PrismaModule,
+    ProjectsModule,
+    ReportsModule,
+    SiteVisitsModule,
+    UsersModule,
+    VehiclesModule,
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+
+============================================================
+FILE: apps/api/src/prisma/prisma.service.ts
+============================================================
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from '../generated/prisma/client';
+
+@Injectable()
+export class PrismaService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
+  constructor() {
+    const databaseUrl = process.env.DATABASE_URL;
+
+    if (!databaseUrl) {
+      throw new Error('DATABASE_URL is missing. Check apps/api/.env');
+    }
+
+    const adapter = new PrismaPg({
+      connectionString: databaseUrl,
+    });
+
+    super({ adapter });
+  }
+
+  async onModuleInit() {
+    await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
+  }
+}
+
+============================================================
+FILE: apps/api/src/auth/auth.controller.ts
+============================================================
+import { Body, Controller, Post } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { LoginDto } from './dto/login.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post('login')
+  login(@Body() loginDto: LoginDto) {
+    return this.authService.login(loginDto);
+  }
+
+  @Post('forgot-password')
+  forgotPassword(@Body() forgotPasswordDto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(forgotPasswordDto);
+  }
+
+  @Post('reset-password')
+  resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
+    return this.authService.resetPassword(resetPasswordDto);
+  }
+}
+
+============================================================
+FILE: apps/api/src/auth/auth.service.ts
+============================================================
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { compare, hash } from 'bcryptjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { OnboardingStatus, Prisma, type User } from '../generated/prisma/client';
+import { getPostLoginOnboardingStatus } from '../users/onboarding-lifecycle';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { LoginDto } from './dto/login.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { PasswordResetOtpService } from './password-reset-otp.service';
+
+const INVALID_LOGIN_MESSAGE = 'Invalid credentials';
+const FORGOT_PASSWORD_RESPONSE_MESSAGE =
+  'If the account exists, a reset code has been sent.';
+const INVALID_OR_EXPIRED_RESET_CODE_MESSAGE = 'Invalid or expired reset code';
+const PASSWORD_RESET_SUCCESS_MESSAGE =
+  'Password reset successful. Sign in with your new password.';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
+    private readonly passwordResetOtpService: PasswordResetOtpService,
+  ) {}
+
+  async login(loginDto: LoginDto) {
+    const identifier = this.normalizeLoginIdentifier(
+      loginDto.identifier ?? loginDto.email,
+    );
+
+    if (!identifier) {
+      throw new UnauthorizedException(INVALID_LOGIN_MESSAGE);
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: this.getLoginWhere(identifier),
+    });
+
+    if (!user) {
+      throw new UnauthorizedException(INVALID_LOGIN_MESSAGE);
+    }
+
+    const isPasswordValid = await compare(loginDto.password, user.password);
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException(INVALID_LOGIN_MESSAGE);
+    }
+
+    const nextOnboardingStatus = getPostLoginOnboardingStatus(
+      user.onboardingStatus,
+    );
+    const loginUser =
+      nextOnboardingStatus !== user.onboardingStatus
+        ? await this.prisma.user.update({
+            where: { id: user.id },
+            data: {
+              onboardingStatus: nextOnboardingStatus,
+            },
+          })
+        : user;
+
+    const accessToken = await this.signAccessToken(loginUser);
+
+    return {
+      user: this.toSafeUser(loginUser),
+      accessToken,
+    };
+  }
+
+  async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {
+    const identifier = this.normalizeLoginIdentifier(
+      forgotPasswordDto.identifier,
+    );
+
+    if (identifier) {
+      const user = await this.prisma.user.findFirst({
+        where: {
+          AND: [
+            this.getLoginWhere(identifier),
+            {
+              onboardingStatus: OnboardingStatus.ACTIVE,
+            },
+          ],
+        },
+      });
+
+      if (user) {
+        await this.passwordResetOtpService.generateForUser(user.id);
+      }
+    }
+
+    return {
+      message: FORGOT_PASSWORD_RESPONSE_MESSAGE,
+    };
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const identifier = this.normalizeLoginIdentifier(
+      resetPasswordDto.identifier,
+    );
+
+    if (!identifier) {
+      throw new BadRequestException(INVALID_OR_EXPIRED_RESET_CODE_MESSAGE);
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        AND: [
+          this.getLoginWhere(identifier),
+          {
+            onboardingStatus: OnboardingStatus.ACTIVE,
+          },
+        ],
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException(INVALID_OR_EXPIRED_RESET_CODE_MESSAGE);
+    }
+
+    await this.passwordResetOtpService.assertValidOtp(
+      user,
+      resetPasswordDto.otp,
+      INVALID_OR_EXPIRED_RESET_CODE_MESSAGE,
+    );
+
+    const passwordHash = await hash(resetPasswordDto.newPassword, 10);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: passwordHash,
+        ...this.passwordResetOtpService.getClearData(),
+      },
+    });
+
+    return {
+      message: PASSWORD_RESET_SUCCESS_MESSAGE,
+    };
+  }
+
+  private getLoginWhere(identifier: string): Prisma.UserWhereInput {
+    return {
+      OR: [
+        {
+          email: identifier,
+        },
+        {
+          username: identifier,
+        },
+      ],
+    };
+  }
+
+  private normalizeLoginIdentifier(identifier?: string) {
+    return identifier?.trim().toLowerCase() ?? '';
+  }
+
+  private async signAccessToken(user: User) {
+    return this.jwtService.signAsync({
+      sub: user.id,
+      email: user.email,
+      role: user.role,
+    });
+  }
+
+  private toSafeUser(user: User) {
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      seId: user.seId,
+      username: user.username,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phoneNumber: user.phoneNumber,
+      dob: user.dob,
+      gender: user.gender,
+      onboardingStatus: user.onboardingStatus,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+}
+
+============================================================
+FILE: apps/api/src/auth/auth.module.ts
+============================================================
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AuthLifecycleService } from './auth-lifecycle.service';
+import { getJwtExpiresIn, getJwtSecret } from './auth-config';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { PermissionsGuard } from './guards/permissions.guard';
+import { RolesGuard } from './guards/roles.guard';
+import { JwtStrategy } from './jwt.strategy';
+import { PasswordResetOtpService } from './password-reset-otp.service';
+
+@Module({
+  imports: [
+    PassportModule,
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        return {
+          secret: getJwtSecret(configService),
+          signOptions: {
+            expiresIn: getJwtExpiresIn(configService),
+          },
+        };
+      },
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [
+    AuthService,
+    AuthLifecycleService,
+    PasswordResetOtpService,
+    JwtStrategy,
+    JwtAuthGuard,
+    PermissionsGuard,
+    RolesGuard,
+  ],
+  exports: [
+    AuthService,
+    AuthLifecycleService,
+    JwtAuthGuard,
+    PermissionsGuard,
+    RolesGuard,
+    PasswordResetOtpService,
+  ],
+})
+export class AuthModule {}
+
+============================================================
+FILE: apps/api/src/auth/auth-config.ts
+============================================================
+NOTE: Sensitive local JWT fallback string redacted for report safety.
+
+import type { ConfigService } from '@nestjs/config';
+import type { JwtSignOptions } from '@nestjs/jwt';
+
+const LOCAL_JWT_SECRET =
+  '[REDACTED_LOCAL_JWT_SECRET]';
+const MIN_JWT_SECRET_LENGTH = 32;
+
+export function getJwtSecret(configService: ConfigService) {
+  const configuredSecret = configService.get<string>('JWT_SECRET')?.trim();
+
+  if (configuredSecret) {
+    validateJwtSecret(configuredSecret);
+    return configuredSecret;
+  }
+
+  if (isProduction(configService)) {
+    throw new Error(
+      `JWT_SECRET is required in production and must be at least ${MIN_JWT_SECRET_LENGTH} characters`,
+    );
+  }
+
+  return LOCAL_JWT_SECRET;
+}
+
+export function getJwtExpiresIn(
+  configService: ConfigService,
+): JwtSignOptions['expiresIn'] {
+  return (
+    (configService.get<string>(
+      'JWT_EXPIRES_IN',
+    ) as JwtSignOptions['expiresIn']) ?? '1d'
+  );
+}
+
+function validateJwtSecret(secret: string) {
+  if (secret.length < MIN_JWT_SECRET_LENGTH || secret === LOCAL_JWT_SECRET) {
+    throw new Error(
+      `JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters and cannot use the local development fallback`,
+    );
+  }
+}
+
+function isProduction(configService: ConfigService) {
+  return configService.get<string>('NODE_ENV') === 'production';
+}
+
+============================================================
+FILE: apps/api/src/auth/permissions.ts
+============================================================
+NOTE: Only important section included.
+
+import { UserRole } from '../generated/prisma/client';
+
+type ValueOf<T> = T[keyof T];
+
+export const PERMISSIONS = {
+  USERS: {
+    VIEW_OWN_PROFILE: 'users:view-own-profile',
+    UPDATE_OWN_PROFILE: 'users:update-own-profile',
+    CHANGE_OWN_PASSWORD: 'users:change-own-password',
+    MANAGE: 'users:manage',
+    CREATE: 'users:create',
+  },
+  SALES_EXECUTIVES: {
+    VIEW_ACTIVE: 'sales-executives:view-active',
+    MANAGE: 'sales-executives:manage',
+    CREATE: 'sales-executives:create',
+    APPROVE_ONBOARDING: 'sales-executives:approve-onboarding',
+    REJECT_ONBOARDING: 'sales-executives:reject-onboarding',
+  },
+  LEADS: {
+    CREATE: 'leads:create',
+    VIEW_ALL: 'leads:view-all',
+    VIEW_ASSIGNED: 'leads:view-assigned',
+    UPDATE_ALL: 'leads:update-all',
+    UPDATE_ASSIGNED: 'leads:update-assigned',
+    DELETE: 'leads:delete',
+    ASSIGN: 'leads:assign',
+  },
+  CUSTOMERS: {
+    CREATE: 'customers:create',
+    VIEW_ALL: 'customers:view-all',
+    VIEW_ASSIGNED: 'customers:view-assigned',
+    UPDATE_ALL: 'customers:update-all',
+    UPDATE_ASSIGNED: 'customers:update-assigned',
+    DELETE: 'customers:delete',
+    ASSIGN: 'customers:assign',
+  },
+  FOLLOW_UPS: {
+    CREATE: 'follow-ups:create',
+    VIEW_ALL: 'follow-ups:view-all',
+    VIEW_ASSIGNED: 'follow-ups:view-assigned',
+    UPDATE_ALL: 'follow-ups:update-all',
+    UPDATE_ASSIGNED: 'follow-ups:update-assigned',
+    DELETE: 'follow-ups:delete',
+    ASSIGN: 'follow-ups:assign',
+  },
+  SITE_VISITS: {
+    CREATE: 'site-visits:create',
+    VIEW_ALL: 'site-visits:view-all',
+    VIEW_ASSIGNED: 'site-visits:view-assigned',
+    UPDATE_ALL: 'site-visits:update-all',
+    UPDATE_ASSIGNED: 'site-visits:update-assigned',
+    CANCEL: 'site-visits:cancel',
+  },
+  VEHICLES: {
+    VIEW: 'vehicles:view',
+    CREATE: 'vehicles:create',
+    UPDATE: 'vehicles:update',
+  },
+  DRIVERS: {
+    VIEW: 'drivers:view',
+    CREATE: 'drivers:create',
+    UPDATE: 'drivers:update',
+  },
+  PLATFORMS: {
+    PLATFORM_CREATE: 'platforms:create',
+    PLATFORM_READ: 'platforms:read',
+    PLATFORM_UPDATE: 'platforms:update',
+  },
+  BOOKINGS: {
+
+============================================================
+FILE: apps/api/src/users/users.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { hash } from 'bcryptjs';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { PasswordResetOtpService } from '../auth/password-reset-otp.service';
+import {
+  canUseSalesSelfService,
+  throwForbiddenUnless,
+} from '../auth/policies';
+import {
+  OnboardingStatus,
+  Prisma,
+  UserRole,
+  type User,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { ChangePasswordWithOtpDto } from './dto/change-password-with-otp.dto';
+import { CompleteSalesProfileDto } from './dto/complete-sales-profile.dto';
+import { CreateSalesExecutiveDto } from './dto/create-sales-executive.dto';
+import { CreateUserDto } from './dto/create-user.dto';
+import { ListUsersDto } from './dto/list-users.dto';
+import {
+  APPROVABLE_ONBOARDING_STATUSES,
+  PASSWORD_CHANGE_STATUSES,
+  PENDING_APPROVAL_STATUSES,
+  PROFILE_COMPLETION_STATUSES,
+  REJECTABLE_ONBOARDING_STATUSES,
+  assertOnboardingStatus,
+} from './onboarding-lifecycle';
+
+const INVALID_OR_EXPIRED_OTP_MESSAGE = 'Invalid or expired OTP';
+const ADMIN_MANAGED_ROLES: readonly UserRole[] = [
+  UserRole.SALES_EXECUTIVE,
+  UserRole.PROJECT_INVENTORY_MANAGER,
+  UserRole.SITE_VISIT_COORDINATOR,
+] as const;
+const ADMIN_USER_STATUSES: readonly OnboardingStatus[] = [
+  OnboardingStatus.ACTIVE,
+  OnboardingStatus.REJECTED,
+] as const;
+
+@Injectable()
+export class UsersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passwordResetOtpService: PasswordResetOtpService,
+  ) {}
+
+  findSalesExecutives() {
+    return this.prisma.user.findMany({
+      where: {
+        role: UserRole.SALES_EXECUTIVE,
+        onboardingStatus: OnboardingStatus.ACTIVE,
+      },
+      orderBy: {
+        name: 'asc',
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        seId: true,
+        username: true,
+        firstName: true,
+        lastName: true,
+
+============================================================
+FILE: apps/api/src/leads/leads.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import {
+  canAssignLead,
+  canDeleteLead,
+  canUpdateAssignedLead,
+  canUpdateLead,
+  canViewAssignedLeads,
+  canViewLead,
+  throwForbiddenUnless,
+} from '../auth/policies';
+import {
+  LeadSource,
+  LeadStatus,
+  Prisma,
+  UserRole,
+  type Lead,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { AssignLeadDto } from './dto/assign-lead.dto';
+import { CreateLeadDto } from './dto/create-lead.dto';
+import { UpdateLeadStatusDto } from './dto/update-lead-status.dto';
+import { UpdateLeadDto } from './dto/update-lead.dto';
+
+const leadInclude = {
+  createdBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+  finalProject: {
+    select: {
+      id: true,
+      projectName: true,
+      location: true,
+    },
+  },
+  finalPlot: {
+    select: {
+      id: true,
+      plotNumber: true,
+      size: true,
+      facing: true,
+      price: true,
+      status: true,
+    },
+  },
+  platform: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  bookings: {
+    orderBy: {
+      bookingDate: 'desc' as const,
+    },
+    take: 1,
+    include: {
+      project: {
+        select: {
+          id: true,
+          projectName: true,
+          location: true,
+
+============================================================
+FILE: apps/api/src/customers/customers.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { throwForbiddenUnless } from '../auth/policies';
+import {
+  CustomerJourneyStatus,
+  Prisma,
+  UserRole,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateCustomerDto } from './dto/create-customer.dto';
+import { UpdateCustomerDto } from './dto/update-customer.dto';
+
+const customerInclude = {
+  sourceLead: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      status: true,
+    },
+  },
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+  createdBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+};
+
+@Injectable()
+export class CustomersService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activityEventsService: ActivityEventsService,
+  ) {}
+
+  async create(createCustomerDto: CreateCustomerDto, user: AuthenticatedUser) {
+    const assignedToId = await this.resolveAssignedToId(
+      user.role === UserRole.SALES_EXECUTIVE
+        ? user.userId
+        : createCustomerDto.assignedToId,
+    );
+
+    const customer = await this.prisma.customer.create({
+      data: {
+
+============================================================
+FILE: apps/api/src/projects/projects.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import {
+  BookingType,
+  CustomerJourneyStatus,
+  PlotBlockStatus,
+  PlotStatus,
+  Prisma,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CancelPlotBlockDto } from './dto/cancel-plot-block.dto';
+import { CreatePlotBlockDto } from './dto/create-plot-block.dto';
+import { CreatePlotDto } from './dto/create-plot.dto';
+import { CreateProjectDto } from './dto/create-project.dto';
+import { UpdatePlotStatusDto } from './dto/update-plot-status.dto';
+import { UpdatePlotDto } from './dto/update-plot.dto';
+import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
+import { UpdateProjectDto } from './dto/update-project.dto';
+
+type ProjectReader = Pick<Prisma.TransactionClient, 'project'>;
+type PlotReader = Pick<Prisma.TransactionClient, 'plot'>;
+type LayoutJsonInput = Prisma.JsonNullValueInput | Prisma.InputJsonValue;
+
+const projectInclude = {
+  plots: {
+    orderBy: {
+      createdAt: 'desc' as const,
+    },
+  },
+};
+
+const plotBlockInclude = {
+  project: {
+    select: {
+      id: true,
+      projectName: true,
+      location: true,
+    },
+  },
+  plot: {
+    select: {
+      id: true,
+      plotNumber: true,
+      status: true,
+    },
+  },
+  customer: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+    },
+  },
+  blockedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+};
+
+const bookingWorkflowInclude = {
+  lead: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+      status: true,
+    },
+  },
+  customer: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+      status: true,
+    },
+  },
+  project: {
+    select: {
+
+============================================================
+FILE: apps/api/src/bookings/bookings.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import {
+  canCreateOwnBookingForLead,
+  canViewBooking,
+  throwForbiddenUnless,
+} from '../auth/policies';
+import {
+  BookingKycStatus,
+  BookingStatus,
+  BookingType,
+  LeadStatus,
+  PaymentStatus,
+  PlotStatus,
+  Prisma,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CancelBookingDto } from './dto/cancel-booking.dto';
+import { CloseSaleDto } from './dto/close-sale.dto';
+import { CreateBookingPaymentDto } from './dto/create-booking-payment.dto';
+import { CreateBookingDto } from './dto/create-booking.dto';
+import { UpdateBookingKycDto } from './dto/update-booking-kyc.dto';
+
+type BookingTransaction = Prisma.TransactionClient;
+
+const bookingInclude = {
+  lead: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      email: true,
+      status: true,
+    },
+  },
+  project: {
+    select: {
+      id: true,
+      projectName: true,
+      location: true,
+    },
+  },
+  plot: {
+    select: {
+      id: true,
+      plotNumber: true,
+      status: true,
+    },
+  },
+  salesExecutive: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+};
+
+const paymentInclude = {
+  receivedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+};
+
+const kycInclude = {
+  verifiedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+  rejectedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+};
+
+
+============================================================
+FILE: apps/api/src/site-visits/site-visits.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { throwForbiddenUnless } from '../auth/policies';
+import { Prisma, SiteVisitStatus, UserRole } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CancelSiteVisitDto } from './dto/cancel-site-visit.dto';
+import { CompleteSiteVisitDto } from './dto/complete-site-visit.dto';
+import { CreateSiteVisitDto } from './dto/create-site-visit.dto';
+import { UpdateSiteVisitDto } from './dto/update-site-visit.dto';
+
+const siteVisitInclude = {
+  lead: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      status: true,
+    },
+  },
+  customer: {
+    select: {
+      id: true,
+      fullName: true,
+      phone: true,
+      status: true,
+    },
+  },
+  project: {
+    select: {
+      id: true,
+      projectName: true,
+      location: true,
+    },
+  },
+  booking: {
+    select: {
+      id: true,
+      type: true,
+      status: true,
+      bookingDate: true,
+    },
+  },
+  vehicle: true,
+  driver: true,
+  assignedTo: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+  createdBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+  startedBy: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+    },
+  },
+  completedBy: {
+    select: {
+      id: true,
+
+============================================================
+FILE: apps/api/src/vehicles/vehicles.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { Prisma, UserRole } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateVehicleDto } from './dto/create-vehicle.dto';
+import { UpdateVehicleStatusDto } from './dto/update-vehicle-status.dto';
+import { UpdateVehicleDto } from './dto/update-vehicle.dto';
+
+@Injectable()
+export class VehiclesService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activityEventsService: ActivityEventsService,
+  ) {}
+
+  async create(createVehicleDto: CreateVehicleDto, user?: AuthenticatedUser) {
+    try {
+      const vehicle = await this.prisma.vehicle.create({
+        data: {
+          registrationNumber: this.requireText(
+            createVehicleDto.registrationNumber,
+            'Registration number is required',
+          ),
+          name: this.cleanText(createVehicleDto.name),
+          type: this.cleanText(createVehicleDto.type),
+          capacity: createVehicleDto.capacity,
+          notes: this.cleanText(createVehicleDto.notes),
+        },
+      });
+
+      await this.activityEventsService.log({
+        action: 'vehicle.created',
+        targetType: 'Vehicle',
+        targetId: vehicle.id,
+        actorId: user?.userId,
+        metadata: this.toVehicleMetadata(vehicle),
+      });
+
+      return vehicle;
+    } catch (error) {
+      this.throwIfDuplicateRegistration(error);
+      throw error;
+    }
+  }
+
+  findAll(user: AuthenticatedUser) {
+    return this.prisma.vehicle.findMany({
+      where:
+        user.role === UserRole.ADMIN
+          ? undefined
+
+============================================================
+FILE: apps/api/src/drivers/drivers.service.ts
+============================================================
+NOTE: Only important section included.
+
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ActivityEventsService } from '../activity-events/activity-events.service';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { Prisma, UserRole } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateDriverDto } from './dto/create-driver.dto';
+import { UpdateDriverStatusDto } from './dto/update-driver-status.dto';
+import { UpdateDriverDto } from './dto/update-driver.dto';
+
+@Injectable()
+export class DriversService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activityEventsService: ActivityEventsService,
+  ) {}
+
+  async create(createDriverDto: CreateDriverDto, user?: AuthenticatedUser) {
+    try {
+      const driver = await this.prisma.driver.create({
+        data: {
+          fullName: this.requireText(createDriverDto.fullName, 'Driver name is required'),
+          phone: this.requireText(createDriverDto.phone, 'Driver phone is required'),
+          licenseNumber: this.cleanText(createDriverDto.licenseNumber),
+          notes: this.cleanText(createDriverDto.notes),
+        },
+      });
+
+      await this.activityEventsService.log({
+        action: 'driver.created',
+        targetType: 'Driver',
+        targetId: driver.id,
+        actorId: user?.userId,
+        metadata: this.toDriverMetadata(driver),
+      });
+
+      return driver;
+    } catch (error) {
+      this.throwIfDuplicateLicense(error);
+      throw error;
+    }
+  }
+
+  findAll(user: AuthenticatedUser) {
+    return this.prisma.driver.findMany({
+      where:
+        user.role === UserRole.ADMIN
+          ? undefined
+          : {
+              isActive: true,
+            },
+      orderBy: {
+
+============================================================
+FILE: apps/api/src/dashboard/dashboard.service.ts
+============================================================
+NOTE: Only important section included.
+
+import { Injectable } from '@nestjs/common';
+import type { AuthenticatedUser } from '../auth/types/authenticated-user';
+import {
+  BookingKycStatus,
+  BookingStatus,
+  FollowUpStatus,
+  LeadSource,
+  LeadStatus,
+  PaymentStatus,
+  PlotBlockStatus,
+  PlotStatus,
+  Prisma,
+  SiteVisitStatus,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { AdminDashboardQueryDto } from './dto/admin-dashboard-query.dto';
+
+const DEFAULT_PENDING_ACTION_TAKE = 20;
+const MAX_PENDING_ACTION_TAKE = 50;
+const DEFAULT_RECENT_ACTIVITY_TAKE = 20;
+const MAX_RECENT_ACTIVITY_TAKE = 50;
+const DEFAULT_ADMIN_ANALYTICS_DAYS = 14;
+const MAX_ADMIN_ANALYTICS_DAYS = 60;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+type PendingActionPriority = 'HIGH' | 'MEDIUM' | 'LOW';
+
+type PendingActionItem = {
+  id: string;
+  type: string;
+  priority: PendingActionPriority;
+  title: string;
+  dueAt?: string;
+  entity: {
+    type: string;
+    id: string;
+    label: string;
+  };
+};
+
+type RecentActivityItem = {
+  id: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  occurredAt: string;
+  actor?: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+  } | null;
+  metadata?: unknown;
+};
+
+type NormalizedAdminDashboardFilters = {
+  startDate: Date;
+  endDate: Date;
+  selectedDate: Date;
+  projectId?: string;
+  source?: LeadSource;
+  platformId?: string;
+};
+
+@Injectable()
+export class DashboardService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  health() {
+    return { ok: true };
+  }
+
+  async getAdminSummary(query: AdminDashboardQueryDto = {}) {
+    const now = new Date();
+    const sevenDaysFromNow = new Date(now.getTime() + SEVEN_DAYS_MS);
+    const analyticsFilters = this.toAdminDashboardFilters(query, now);
+    const leadAnalyticsWhere = this.toLeadAnalyticsWhere(analyticsFilters);
+    const selectedDayStart = this.startOfDay(analyticsFilters.selectedDate);
+    const selectedDayEnd = this.endOfDay(analyticsFilters.selectedDate);
+
+============================================================
+FILE: apps/api/src/reports/reports.service.ts
+============================================================
+NOTE: Only important section included.
+
+import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BookingStatus,
+  BookingType,
+  LeadSource,
+  LeadStatus,
+  Prisma,
+  UserRole,
+} from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { ReportDateRangeDto } from './dto/report-date-range.dto';
+
+type ReportDateRange = {
+  from?: Date;
+  to?: Date;
+};
+
+type ReportFilters = {
+  from: string | null;
+  to: string | null;
+};
+
+type CsvExport = {
+  filename: string;
+  content: string;
+};
+
+type CountRow<TStatus extends string> = {
+  status: TStatus;
+  _count: {
+    _all: number;
+  };
+};
+
+type NullableSourceCountRow = {
+  source: LeadSource | null;
+  _count: {
+    _all: number;
+  };
+};
+
+type TypeCountRow<TType extends string> = {
+  type: TType;
+  _count: {
+    _all: number;
+  };
+};
+
+type LeadReportItem = {
+  id: string;
+  fullName: string;
+  phone: string;
+  email: string | null;
+  status: LeadStatus;
+  source: LeadSource | null;
+  propertyType: string | null;
+  budget: string | null;
+  location: string | null;
+  assignedTo: { id: string; name: string; email: string } | null;
+  createdBy: { id: string; name: string; email: string } | null;
+  finalProject: { id: string; projectName: string; location: string } | null;
+  finalPlot: { id: string; plotNumber: string } | null;
+  bookingAmount: string | null;
+  bookingDate: string | null;
+  followUpDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type BookingReportItem = {
+  id: string;
+  type: BookingType;
+  status: BookingStatus;
+  contactName: string;
+  leadName: string | null;
+  customerName: string | null;
+  projectName: string;
+  plotNumber: string;
+  salesExecutive: { id: string; name: string; email: string };
+  amountPaid: string | null;
+
+============================================================
+FILE: apps/api/src/activity-events/activity-events.service.ts
+============================================================
+import { Injectable } from '@nestjs/common';
+import { Prisma } from '../generated/prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { ListActivityEventsDto } from './dto/list-activity-events.dto';
+
+const activityEventInclude = {
+  actor: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+    },
+  },
+};
+
+export type LogActivityEventInput = {
+  action: string;
+  targetType: string;
+  targetId: string;
+  actorId?: string;
+  metadata?: Prisma.InputJsonValue;
+};
+
+@Injectable()
+export class ActivityEventsService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  log(input: LogActivityEventInput, tx?: Prisma.TransactionClient) {
+    const prisma = tx ?? this.prisma;
+    const data: Prisma.ActivityEventUncheckedCreateInput = {
+      action: input.action,
+      targetType: input.targetType,
+      targetId: input.targetId,
+    };
+
+    if (input.actorId !== undefined) {
+      data.actorId = input.actorId;
+    }
+
+    if (input.metadata !== undefined) {
+      data.metadata = input.metadata;
+    }
+
+    return prisma.activityEvent.create({
+      data,
+    });
+  }
+
+  findAll(query: ListActivityEventsDto) {
+    const take = query.take ?? 50;
+
+    return this.prisma.activityEvent.findMany({
+      where: this.toWhereInput(query),
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      take,
+      skip: query.cursor ? 1 : undefined,
+      cursor: query.cursor
+        ? {
+            id: query.cursor,
+          }
+        : undefined,
+      include: activityEventInclude,
+    });
+  }
+
+  private toWhereInput(
+    query: ListActivityEventsDto,
+  ): Prisma.ActivityEventWhereInput {
+    return {
+      targetType: query.targetType,
+      targetId: query.targetId,
+      actorId: query.actorId,
+      action: query.action,
+      occurredAt:
+        query.from || query.to
+          ? {
+              gte: query.from ? new Date(query.from) : undefined,
+              lte: query.to ? new Date(query.to) : undefined,
+            }
+          : undefined,
+    };
+  }
+}
+
+============================================================
+FILE: apps/api/src/projects/dto/create-project.dto.ts
+============================================================
+import { Type } from 'class-transformer';
+import { IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+
+export class CreateProjectDto {
+  @IsString()
+  @MinLength(2)
+  projectName: string;
+
+  @IsString()
+  @MinLength(2)
+  location: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  totalPlots?: number;
+}
+
+============================================================
+FILE: apps/api/src/bookings/dto/create-booking.dto.ts
+============================================================
+import { Type } from 'class-transformer';
+import {
+  IsDateString,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+} from 'class-validator';
+import { BookingType } from '../../generated/prisma/client';
+
+export class CreateBookingDto {
+  @IsString()
+  @IsUUID()
+  leadId: string;
+
+  @IsString()
+  @IsUUID()
+  projectId: string;
+
+  @IsString()
+  @IsUUID()
+  plotId: string;
+
+  @IsEnum(BookingType)
+  type: BookingType;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  amountPaid?: number;
+
+  @IsOptional()
+  @IsDateString()
+  bookingDate?: string;
+}
+
+============================================================
+FILE: apps/api/src/site-visits/dto/create-site-visit.dto.ts
+============================================================
+import { IsDateString, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+
+export class CreateSiteVisitDto {
+  @IsDateString()
+  scheduledAt: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  notes?: string;
+
+  @IsOptional()
+  @IsUUID()
+  leadId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  customerId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  bookingId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  vehicleId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  driverId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  assignedToId?: string;
+}
+
+
