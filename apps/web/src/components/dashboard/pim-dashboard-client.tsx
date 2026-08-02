@@ -21,6 +21,7 @@ import {
   DashboardError,
   DashboardLoading,
 } from "@/components/dashboard/dashboard-state"
+import { PlotLayoutEditor } from "@/components/projects/plot-layout-editor"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -39,7 +40,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { getFriendlyApiError } from "@/lib/api"
 import { getToken } from "@/lib/auth"
 import { formatLocalDateTime } from "@/lib/date"
@@ -61,6 +61,7 @@ import {
   type PlotPriceHistory,
   type PlotStatus,
   type Project,
+  type ProjectLayoutJson,
   type UpdatePlotInput,
 } from "@/lib/projects"
 
@@ -102,7 +103,8 @@ export function PimDashboardClient({
   const [statusValue, setStatusValue] = useState<PlotStatus>("AVAILABLE")
   const [priceValue, setPriceValue] = useState("")
   const [priceReason, setPriceReason] = useState("")
-  const [layoutText, setLayoutText] = useState("{\n  \"plots\": []\n}")
+  const [layoutJson, setLayoutJson] = useState<ProjectLayoutJson | null>(null)
+  const [isLayoutDirty, setIsLayoutDirty] = useState(false)
   const [plotBlocks, setPlotBlocks] = useState<PlotBlock[]>([])
   const [priceHistory, setPriceHistory] = useState<PlotPriceHistory[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -214,9 +216,11 @@ export function PimDashboardClient({
 
     try {
       const layout = await getProjectLayout(token, selectedProjectId)
-      setLayoutText(JSON.stringify(layout, null, 2))
+      setLayoutJson(layout)
+      setIsLayoutDirty(false)
     } catch {
-      setLayoutText("{\n  \"plots\": []\n}")
+      setLayoutJson({ plots: [] })
+      setIsLayoutDirty(false)
     } finally {
       setIsLayoutLoading(false)
     }
@@ -404,42 +408,36 @@ export function PimDashboardClient({
     })
   }
 
-  async function handleUpdateLayout(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-
+  async function handleSaveLayout(nextLayout: ProjectLayoutJson) {
     if (!selectedProjectId) {
-      setError("Select a project before saving layout JSON.")
-      return
+      throw new Error("Select a project before saving layout.")
     }
 
-    let parsedLayout: Record<string, unknown> | unknown[]
+    const token = getToken()
+
+    if (!token) {
+      const message = "Your session has expired. Please log in again."
+      setError(message)
+      throw new Error(message)
+    }
+
+    setIsSubmitting(true)
+    setError(null)
+    setActionMessage(null)
 
     try {
-      const parsed = JSON.parse(layoutText) as unknown
-
-      if (
-        parsed === null ||
-        (typeof parsed !== "object" && !Array.isArray(parsed))
-      ) {
-        setError("Layout JSON must be an object or array.")
-        return
-      }
-
-      parsedLayout = parsed as Record<string, unknown> | unknown[]
-    } catch {
-      setError("Enter valid layout JSON before saving.")
-      return
-    }
-
-    await runAction(async (token) => {
-      const savedLayout = await updateProjectLayout(
-        token,
-        selectedProjectId,
-        parsedLayout
-      )
-      setLayoutText(JSON.stringify(savedLayout, null, 2))
+      const savedLayout = await updateProjectLayout(token, selectedProjectId, nextLayout)
+      setLayoutJson(savedLayout)
+      setIsLayoutDirty(false)
       setActionMessage("Project layout saved.")
-    })
+      return savedLayout
+    } catch (err) {
+      const message = getFriendlyApiError(err, "Unable to save project layout")
+      setError(message)
+      throw new Error(message)
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   async function runAction(action: (token: string) => Promise<void>) {
@@ -471,6 +469,23 @@ export function PimDashboardClient({
       ...current,
       [key]: value,
     }))
+  }
+
+  function handleSelectedProjectChange(projectId: string) {
+    if (projectId === selectedProjectId) {
+      return
+    }
+
+    if (
+      isLayoutDirty &&
+      !window.confirm("Switch projects and discard unsaved layout changes?")
+    ) {
+      return
+    }
+
+    setSelectedProjectId(projectId)
+    setSelectedPlotId("")
+    setIsLayoutDirty(false)
   }
 
   if (isLoading) {
@@ -627,7 +642,7 @@ export function PimDashboardClient({
                   <ProjectSelector
                     projects={projects}
                     selectedProjectId={selectedProjectId}
-                    onChange={setSelectedProjectId}
+                    onChange={handleSelectedProjectChange}
                   />
                   <div className="rounded-lg border bg-background p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -705,7 +720,7 @@ export function PimDashboardClient({
                 <ProjectSelector
                   projects={projects}
                   selectedProjectId={selectedProjectId}
-                  onChange={setSelectedProjectId}
+                  onChange={handleSelectedProjectChange}
                 />
                 <Field label="Project name" htmlFor="editProjectName">
                   <Input
@@ -769,7 +784,7 @@ export function PimDashboardClient({
                 <ProjectSelector
                   projects={projects}
                   selectedProjectId={selectedProjectId}
-                  onChange={setSelectedProjectId}
+                  onChange={handleSelectedProjectChange}
                 />
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field label="Plot number" htmlFor="plotNumber">
@@ -1000,40 +1015,29 @@ export function PimDashboardClient({
 
         <Card className="rounded-lg" id="layout">
           <CardHeader>
-            <CardTitle>Project layout JSON</CardTitle>
+            <CardTitle>Visual plot layout</CardTitle>
             <CardDescription>
-              Store structured layout coordinates or metadata for the selected project.
+              Arrange project plots on an interactive layout canvas.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {selectedProject ? (
-              <form className="grid gap-3" onSubmit={handleUpdateLayout}>
+              <div className="grid gap-3">
                 <ProjectSelector
                   projects={projects}
                   selectedProjectId={selectedProjectId}
-                  onChange={setSelectedProjectId}
+                  onChange={handleSelectedProjectChange}
                 />
-                <Field label="Layout JSON" htmlFor="layoutJson">
-                  <Textarea
-                    id="layoutJson"
-                    value={layoutText}
-                    disabled={isSubmitting || isLayoutLoading}
-                    className="min-h-48 font-mono text-sm"
-                    spellCheck={false}
-                    onChange={(event) => setLayoutText(event.target.value)}
-                  />
-                </Field>
-                <Button
-                  type="submit"
-                  variant="outline"
-                  disabled={isSubmitting || isLayoutLoading}
-                >
-                  {isLayoutLoading ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : null}
-                  Save layout
-                </Button>
-              </form>
+                <PlotLayoutEditor
+                  project={selectedProject}
+                  plots={plots}
+                  layoutJson={layoutJson}
+                  isLoading={isLayoutLoading}
+                  isSaving={isSubmitting}
+                  onSave={handleSaveLayout}
+                  onDirtyChange={setIsLayoutDirty}
+                />
+              </div>
             ) : (
               <EmptyPanel message="Create a project to save layout data." />
             )}
