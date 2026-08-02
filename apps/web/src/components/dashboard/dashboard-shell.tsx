@@ -311,6 +311,11 @@ function getNavItems(user: AuthUser, dashboardHref: string): DashboardNavItem[] 
       icon: Building2,
     },
     {
+      href: "/dashboard/sales/booking",
+      label: "Bookings",
+      icon: FileText,
+    },
+    {
       href: "/dashboard/sales/leads#create-lead",
       label: "Create Lead",
       icon: PlusCircle,

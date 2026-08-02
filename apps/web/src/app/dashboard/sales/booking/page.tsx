@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import {
   type FormEvent,
   type ReactNode,
@@ -10,7 +11,7 @@ import {
   useState,
 } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2 } from "lucide-react"
+import { Eye, Loader2, RefreshCw } from "lucide-react"
 import { ProtectedRoute } from "@/components/auth/protected-route"
 import {
   DashboardEmpty,
@@ -18,8 +19,15 @@ import {
   DashboardLoading,
 } from "@/components/dashboard/dashboard-state"
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -29,10 +37,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { useToast } from "@/components/ui/toast"
 import { getFriendlyApiError } from "@/lib/api"
 import { getToken, type AuthUser } from "@/lib/auth"
 import { formatLocalDate } from "@/lib/date"
+import {
+  getBookingKyc,
+  getBookingPayments,
+  getCompletedPaymentTotal,
+  listBookings,
+  type BookingKyc,
+  type BookingPayment,
+  type BookingStatus,
+  type BookingSummary,
+} from "@/lib/bookings"
 import { getMyLeads, type Lead } from "@/lib/leads"
 import {
   createBooking,
@@ -84,17 +110,249 @@ export default function SalesBookingPage() {
       {(user) => (
         <DashboardShell
           user={user}
-          title="Complete Booking"
-          description="Confirm the project, plot, payment, and booking status."
+          title="Bookings"
+          description="Review booking lifecycle, payments, and KYC."
         >
-          <BookingClient user={user} />
+          <SalesBookingLifecycleClient user={user} />
         </DashboardShell>
       )}
     </ProtectedRoute>
   )
 }
 
-function BookingClient({ user }: { user: AuthUser }) {
+function SalesBookingLifecycleClient({ user }: { user: AuthUser }) {
+  const [isCreateMode] = useState(() => hasBookingCreateIntent())
+
+  return isCreateMode ? <BookingCreateClient user={user} /> : <BookingListClient />
+}
+
+function BookingListClient() {
+  const token = useMemo(() => getToken(), [])
+  const toast = useToast()
+  const [bookings, setBookings] = useState<BookingSummary[]>([])
+  const [kycByBookingId, setKycByBookingId] = useState<
+    Record<string, BookingKyc | undefined>
+  >({})
+  const [paymentsByBookingId, setPaymentsByBookingId] = useState<
+    Record<string, BookingPayment[] | undefined>
+  >({})
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadBookings = useCallback(async (showLoading = false) => {
+    if (!token) {
+      setError("Your session has expired. Please log in again.")
+      setIsLoading(false)
+      setIsRefreshing(false)
+      return
+    }
+
+    if (showLoading) {
+      setIsLoading(true)
+    } else {
+      setIsRefreshing(true)
+    }
+    setError(null)
+
+    try {
+      const bookingData = await listBookings(token)
+      setBookings(bookingData)
+
+      const lifecycleEntries = await Promise.all(
+        bookingData.map(async (booking) => {
+          const [kyc, payments] = await Promise.all([
+            getBookingKyc(token, booking.id),
+            getBookingPayments(token, booking.id),
+          ])
+
+          return {
+            bookingId: booking.id,
+            kyc,
+            payments,
+          }
+        })
+      )
+
+      setKycByBookingId(
+        Object.fromEntries(
+          lifecycleEntries.map((entry) => [entry.bookingId, entry.kyc])
+        )
+      )
+      setPaymentsByBookingId(
+        Object.fromEntries(
+          lifecycleEntries.map((entry) => [entry.bookingId, entry.payments])
+        )
+      )
+    } catch (err) {
+      const message = getFriendlyApiError(err, "Unable to load bookings")
+      setError(message)
+
+      if (!showLoading) {
+        toast.error("Unable to refresh bookings", message)
+      }
+    } finally {
+      setIsLoading(false)
+      setIsRefreshing(false)
+    }
+  }, [toast, token])
+
+  useEffect(() => {
+    void Promise.resolve().then(() => loadBookings(true))
+  }, [loadBookings])
+
+  if (isLoading) {
+    return (
+      <DashboardLoading
+        title="Loading bookings"
+        description="Fetching your assigned booking records."
+        rows={4}
+      />
+    )
+  }
+
+  if (error && bookings.length === 0) {
+    return (
+      <DashboardError
+        title="Bookings unavailable"
+        message={error}
+        onRetry={() => loadBookings(true)}
+      />
+    )
+  }
+
+  if (bookings.length === 0) {
+    return (
+      <DashboardEmpty
+        title="No bookings yet"
+        message="Create a booking from an assigned lead when a customer is ready to block or book a plot."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/dashboard/sales/leads">Open leads</Link>
+          </Button>
+        }
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-base font-semibold">My bookings</h2>
+          <p className="text-sm text-muted-foreground">
+            Latest booking record from each assigned lead.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isRefreshing}
+          aria-busy={isRefreshing}
+          onClick={() => loadBookings(false)}
+        >
+          <RefreshCw
+            className={isRefreshing ? "size-4 animate-spin" : "size-4"}
+          />
+          {isRefreshing ? "Refreshing..." : "Refresh"}
+        </Button>
+      </div>
+
+      {error ? (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          {error}
+        </div>
+      ) : null}
+
+      <Card className="rounded-lg">
+        <CardHeader>
+          <CardTitle>Booking lifecycle</CardTitle>
+          <CardDescription>
+            Payments and KYC are loaded from the booking lifecycle APIs.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table aria-label="Sales bookings" className="min-w-[1120px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Booking</TableHead>
+                <TableHead>Buyer</TableHead>
+                <TableHead>Project / plot</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>KYC</TableHead>
+                <TableHead>Payments</TableHead>
+                <TableHead>Booking date</TableHead>
+                <TableHead className="text-right">Details</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bookings.map((booking) => {
+                const payments = paymentsByBookingId[booking.id] ?? []
+                const kyc = kycByBookingId[booking.id]
+
+                return (
+                  <TableRow key={booking.id}>
+                    <TableCell className="min-w-44 whitespace-normal align-top">
+                      <p className="font-medium">{formatBookingRef(booking.id)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatEnum(booking.type)}
+                      </p>
+                    </TableCell>
+                    <TableCell className="min-w-48 whitespace-normal align-top">
+                      <p className="font-medium">
+                        {booking.lead?.fullName ??
+                          booking.customer?.fullName ??
+                          "Buyer not available"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {booking.lead?.phone ?? booking.customer?.phone ?? "-"}
+                      </p>
+                    </TableCell>
+                    <TableCell className="min-w-48 whitespace-normal align-top">
+                      <p>{booking.project?.projectName ?? "Project not set"}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Plot {booking.plot?.plotNumber ?? "not set"}
+                      </p>
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <BookingStatusBadge status={booking.status} />
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <KycStatusBadge status={kyc?.status ?? "NOT_STARTED"} />
+                    </TableCell>
+                    <TableCell className="min-w-40 whitespace-normal align-top">
+                      <p>{formatCurrency(getCompletedPaymentTotal(payments))}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {payments.length} payment entries
+                      </p>
+                    </TableCell>
+                    <TableCell className="align-top">
+                      {formatLocalDate(booking.bookingDate)}
+                    </TableCell>
+                    <TableCell className="text-right align-top">
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/dashboard/sales/bookings/${booking.id}`}>
+                          <Eye className="size-4" />
+                          Open
+                        </Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function BookingCreateClient({ user }: { user: AuthUser }) {
   const router = useRouter()
   const token = useMemo(() => getToken(), [])
   const toast = useToast()
@@ -755,4 +1013,76 @@ function getBookingSubmitGuidance({
 
 function formatPlotStatus(status: Plot["status"]) {
   return status.replaceAll("_", " ").toLowerCase()
+}
+
+function hasBookingCreateIntent() {
+  if (typeof window === "undefined") {
+    return false
+  }
+
+  const searchParams = new URLSearchParams(window.location.search)
+
+  return Boolean(searchParams.get("leadId"))
+}
+
+function BookingStatusBadge({ status }: { status: BookingStatus }) {
+  const className =
+    status === "ACTIVE"
+      ? "border-sky-200 bg-sky-50 text-sky-700"
+      : status === "CLOSED"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border-rose-200 bg-rose-50 text-rose-700"
+
+  return (
+    <Badge variant="outline" className={`w-fit rounded-md ${className}`}>
+      {formatEnum(status)}
+    </Badge>
+  )
+}
+
+function KycStatusBadge({ status }: { status: BookingKyc["status"] }) {
+  const className =
+    status === "VERIFIED"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : status === "REJECTED"
+        ? "border-rose-200 bg-rose-50 text-rose-700"
+        : status === "PENDING"
+          ? "border-amber-200 bg-amber-50 text-amber-700"
+          : "border-border bg-background text-muted-foreground"
+
+  return (
+    <Badge variant="outline" className={`w-fit rounded-md ${className}`}>
+      {formatEnum(status)}
+    </Badge>
+  )
+}
+
+function formatBookingRef(id: string) {
+  return `#${id.slice(0, 8).toUpperCase()}`
+}
+
+function formatCurrency(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") {
+    return "Not set"
+  }
+
+  const numericValue = Number(value)
+
+  if (Number.isNaN(numericValue)) {
+    return String(value)
+  }
+
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(numericValue)
+}
+
+function formatEnum(value: string) {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
 }

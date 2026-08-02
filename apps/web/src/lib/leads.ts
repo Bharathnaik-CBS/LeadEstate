@@ -48,8 +48,20 @@ export type LeadPlot = {
 export type LeadBooking = {
   id: string
   type: "BOOKED" | "BLOCKED"
+  status?: "ACTIVE" | "CANCELLED" | "CLOSED"
   amountPaid?: string | number | null
   bookingDate: string
+  leadId?: string | null
+  customerId?: string | null
+  projectId?: string
+  plotId?: string
+  salesExecutiveId?: string
+  cancelledAt?: string | null
+  cancellationReason?: string | null
+  closedAt?: string | null
+  closureNotes?: string | null
+  createdAt?: string
+  updatedAt?: string
   project?: LeadProject | null
   plot?: LeadPlot | null
   salesExecutive?: Pick<LeadUser, "id" | "name" | "email"> | null
