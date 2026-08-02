@@ -316,6 +316,11 @@ function getNavItems(user: AuthUser, dashboardHref: string): DashboardNavItem[] 
       icon: FileText,
     },
     {
+      href: "/dashboard/sales/customers",
+      label: "Customers",
+      icon: Users,
+    },
+    {
       href: "/dashboard/sales/leads#create-lead",
       label: "Create Lead",
       icon: PlusCircle,

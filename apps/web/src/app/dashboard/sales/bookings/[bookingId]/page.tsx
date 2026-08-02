@@ -457,6 +457,17 @@ function BookingDetailClient() {
               label="Contact"
               value={booking.lead?.phone ?? booking.customer?.phone ?? "Not set"}
             />
+            {booking.customerId ? (
+              <DetailField label="Customer journey">
+                <Button asChild variant="outline" size="sm" className="mt-1">
+                  <Link
+                    href={`/dashboard/sales/customers/${booking.customerId}/journey`}
+                  >
+                    Open journey
+                  </Link>
+                </Button>
+              </DetailField>
+            ) : null}
             <DetailField
               label="Project"
               value={booking.project?.projectName ?? "Not set"}

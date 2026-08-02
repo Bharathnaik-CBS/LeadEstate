@@ -138,6 +138,10 @@ export type CloseSaleInput = {
 export async function listBookings(token: string) {
   const leads = await getMyLeads(token)
 
+  return getBookingsFromLeads(leads)
+}
+
+export function getBookingsFromLeads(leads: Lead[]) {
   return leads
     .flatMap((lead) =>
       (lead.bookings ?? []).map((booking) => toBookingSummary(lead, booking))

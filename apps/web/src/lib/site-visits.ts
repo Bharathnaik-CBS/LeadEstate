@@ -59,6 +59,11 @@ export type SiteVisit = {
   driver?: Driver | null
   assignedTo?: LeadUser | null
   createdBy?: LeadUser | null
+  startedBy?: Pick<LeadUser, "id" | "name" | "email"> | null
+  completedBy?: Pick<LeadUser, "id" | "name" | "email"> | null
+  cancelledBy?: Pick<LeadUser, "id" | "name" | "email"> | null
+  createdAt?: string
+  updatedAt?: string
 }
 
 export type CreateSiteVisitInput = {
