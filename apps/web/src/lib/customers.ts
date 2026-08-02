@@ -1,5 +1,9 @@
 import { apiRequest } from "@/lib/api"
 import {
+  listActivityEvents,
+  type ActivityEvent,
+} from "@/lib/activity-events"
+import {
   getBookingsFromLeads,
   getBookingKyc,
   getBookingPayments,
@@ -85,17 +89,6 @@ export type CreateFollowUpInput = {
 
 export type UpdateFollowUpInput = Partial<CreateFollowUpInput>
 
-export type ActivityEvent = {
-  id: string
-  action: string
-  targetType: string
-  targetId: string
-  actorId?: string | null
-  actor?: LeadUser | null
-  metadata?: Record<string, unknown> | null
-  occurredAt: string
-}
-
 export type BookingJourneyRecord = BookingSummary & {
   payments: BookingPayment[]
   kyc?: BookingKyc
@@ -178,33 +171,6 @@ export function updateFollowUp(
     token,
     body: cleanInput(input),
   })
-}
-
-export function getActivityEvents(
-  token: string,
-  query: {
-    targetType?: string
-    targetId?: string
-    take?: number
-  } = {}
-) {
-  const params = new URLSearchParams()
-
-  if (query.targetType) {
-    params.set("targetType", query.targetType)
-  }
-
-  if (query.targetId) {
-    params.set("targetId", query.targetId)
-  }
-
-  if (query.take) {
-    params.set("take", String(query.take))
-  }
-
-  const suffix = params.toString() ? `?${params.toString()}` : ""
-
-  return apiRequest<ActivityEvent[]>(`/activity-events${suffix}`, { token })
 }
 
 export async function getCustomerJourney(
@@ -367,14 +333,14 @@ async function loadActivityEvents(
   ]
 
   const results = await Promise.allSettled(
-    queries.map((query) => getActivityEvents(token, { ...query, take: 100 }))
+    queries.map((query) => listActivityEvents(token, { ...query, take: 100 }))
   )
 
   const events: ActivityEvent[] = []
 
   for (const result of results) {
     if (result.status === "fulfilled") {
-      events.push(...result.value)
+      events.push(...result.value.events)
     } else {
       warnings.push("Some system activity events could not be loaded.")
     }

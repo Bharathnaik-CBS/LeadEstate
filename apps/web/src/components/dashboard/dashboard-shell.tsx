@@ -242,6 +242,11 @@ function getNavItems(user: AuthUser, dashboardHref: string): DashboardNavItem[] 
         icon: FileText,
       },
       {
+        href: "/dashboard/admin/activity",
+        label: "Activity Log",
+        icon: FileText,
+      },
+      {
         href: "/dashboard/admin#performance",
         label: "Performance",
         icon: TrendingUp,
