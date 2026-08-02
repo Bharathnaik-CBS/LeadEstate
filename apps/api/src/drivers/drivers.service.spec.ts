@@ -98,6 +98,19 @@ describe('DriversService', () => {
     });
   });
 
+  it('allows site visit coordinators to list active and inactive drivers', async () => {
+    prisma.driver.findMany.mockResolvedValue([]);
+
+    await service.findAll(createUser(UserRole.SITE_VISIT_COORDINATOR));
+
+    expect(prisma.driver.findMany).toHaveBeenCalledWith({
+      where: undefined,
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  });
+
   it('hides inactive drivers from sales executives when fetching by id', async () => {
     prisma.driver.findFirst.mockResolvedValue(null);
 
@@ -108,6 +121,18 @@ describe('DriversService', () => {
       where: {
         id: 'driver-1',
         isActive: true,
+      },
+    });
+  });
+
+  it('allows site visit coordinators to fetch inactive drivers by id', async () => {
+    prisma.driver.findUnique.mockResolvedValue(createDriver({ isActive: false }));
+
+    await service.findOne('driver-1', createUser(UserRole.SITE_VISIT_COORDINATOR));
+
+    expect(prisma.driver.findUnique).toHaveBeenCalledWith({
+      where: {
+        id: 'driver-1',
       },
     });
   });

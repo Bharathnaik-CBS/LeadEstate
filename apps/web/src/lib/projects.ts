@@ -47,6 +47,12 @@ export type CreatePlotInput = {
 
 export type UpdateProjectInput = Partial<CreateProjectInput>
 
+export type UpdatePlotInput = {
+  plotNumber?: string
+  size?: string
+  facing?: string
+}
+
 export type UpdatePlotStatusInput = {
   status: PlotStatus
 }
@@ -173,6 +179,19 @@ export function createPlot(
 ) {
   return apiRequest<Plot>(`/projects/${projectId}/plots`, {
     method: "POST",
+    token,
+    body: cleanInput(input),
+  })
+}
+
+export function updatePlot(
+  token: string,
+  projectId: string,
+  plotId: string,
+  input: UpdatePlotInput
+) {
+  return apiRequest<Plot>(`/projects/${projectId}/plots/${plotId}`, {
+    method: "PATCH",
     token,
     body: cleanInput(input),
   })

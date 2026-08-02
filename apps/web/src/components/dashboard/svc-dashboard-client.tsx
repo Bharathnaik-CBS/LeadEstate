@@ -56,9 +56,15 @@ import {
   getSiteVisits,
   getVehicles,
   startSiteVisit,
+  updateDriver,
+  updateDriverStatus,
+  updateVehicle,
+  updateVehicleStatus,
   type Driver,
   type SiteVisit,
   type SiteVisitStatus,
+  type UpdateDriverInput,
+  type UpdateVehicleInput,
   type Vehicle,
 } from "@/lib/site-visits"
 import { getSalesExecutives } from "@/lib/users"
@@ -114,6 +120,8 @@ export function SvcDashboardClient({
   const [salesUsers, setSalesUsers] = useState<AuthUser[]>([])
   const [visitForm, setVisitForm] = useState<VisitFormState>(initialVisitForm)
   const [selectedVisitId, setSelectedVisitId] = useState("")
+  const [selectedVehicleId, setSelectedVehicleId] = useState("")
+  const [selectedDriverId, setSelectedDriverId] = useState("")
   const [targetStatus, setTargetStatus] = useState<SiteVisitStatus>("STARTED")
   const [statusNotes, setStatusNotes] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -123,6 +131,22 @@ export function SvcDashboardClient({
 
   const selectedVisit =
     visits.find((visit) => visit.id === selectedVisitId) ?? visits[0] ?? null
+  const selectedVehicle =
+    vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ??
+    vehicles[0] ??
+    null
+  const selectedDriver =
+    drivers.find((driver) => driver.id === selectedDriverId) ??
+    drivers[0] ??
+    null
+  const activeVehicles = useMemo(
+    () => vehicles.filter((vehicle) => vehicle.isActive),
+    [vehicles]
+  )
+  const activeDrivers = useMemo(
+    () => drivers.filter((driver) => driver.isActive),
+    [drivers]
+  )
   const showOverview = view === "overview"
   const showSiteVisitWorkflows = view === "site-visits"
   const showVehicleWorkflows = view === "vehicles"
@@ -135,10 +159,10 @@ export function SvcDashboardClient({
       pending: visits.filter((visit) =>
         ["SCHEDULED", "STARTED"].includes(visit.status)
       ).length,
-      vehicles: vehicles.length,
-      drivers: drivers.length,
+      vehicles: activeVehicles.length,
+      drivers: activeDrivers.length,
     }),
-    [drivers.length, vehicles.length, visits]
+    [activeDrivers.length, activeVehicles.length, visits]
   )
 
   const loadDashboard = useCallback(async () => {
@@ -179,6 +203,16 @@ export function SvcDashboardClient({
         current && visitData.some((visit) => visit.id === current)
           ? current
           : visitData[0]?.id ?? ""
+      )
+      setSelectedVehicleId((current) =>
+        current && vehicleData.some((vehicle) => vehicle.id === current)
+          ? current
+          : vehicleData[0]?.id ?? ""
+      )
+      setSelectedDriverId((current) =>
+        current && driverData.some((driver) => driver.id === current)
+          ? current
+          : driverData[0]?.id ?? ""
       )
     } catch (err) {
       setError(getFriendlyApiError(err, "Unable to load SVC dashboard"))
@@ -362,6 +396,110 @@ export function SvcDashboardClient({
       })
       form.reset()
       setActionMessage("Driver added.")
+      await loadDashboard()
+    })
+  }
+
+  async function handleUpdateVehicle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!selectedVehicle) {
+      setError("Select a vehicle to update.")
+      return
+    }
+
+    const formData = new FormData(event.currentTarget)
+    const registrationNumber = getFormValue(formData, "registrationNumber")
+    const capacity = getFormValue(formData, "capacity")
+
+    if (!registrationNumber) {
+      setError("Vehicle registration number is required.")
+      return
+    }
+
+    if (capacity && (!Number.isInteger(Number(capacity)) || Number(capacity) < 1)) {
+      setError("Vehicle capacity must be a positive whole number.")
+      return
+    }
+
+    await runAction(async (token) => {
+      const input: UpdateVehicleInput = {
+        registrationNumber,
+        name: getFormValue(formData, "name"),
+        type: getFormValue(formData, "type"),
+        capacity,
+        notes: getFormValue(formData, "notes"),
+      }
+      await updateVehicle(token, selectedVehicle.id, input)
+      setActionMessage("Vehicle updated.")
+      await loadDashboard()
+    })
+  }
+
+  async function handleVehicleStatus(vehicle: Vehicle) {
+    const nextActiveState = !vehicle.isActive
+    const confirmed = nextActiveState
+      ? true
+      : window.confirm(`Deactivate vehicle ${vehicle.registrationNumber}?`)
+
+    if (!confirmed) {
+      return
+    }
+
+    await runAction(async (token) => {
+      await updateVehicleStatus(token, vehicle.id, nextActiveState)
+      setActionMessage(
+        nextActiveState ? "Vehicle reactivated." : "Vehicle deactivated."
+      )
+      await loadDashboard()
+    })
+  }
+
+  async function handleUpdateDriver(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!selectedDriver) {
+      setError("Select a driver to update.")
+      return
+    }
+
+    const formData = new FormData(event.currentTarget)
+    const fullName = getFormValue(formData, "fullName")
+    const phone = getFormValue(formData, "phone")
+
+    if (!fullName || !phone) {
+      setError("Driver name and phone are required.")
+      return
+    }
+
+    await runAction(async (token) => {
+      const input: UpdateDriverInput = {
+        fullName,
+        phone,
+        licenseNumber: getFormValue(formData, "licenseNumber"),
+        notes: getFormValue(formData, "notes"),
+      }
+      await updateDriver(token, selectedDriver.id, input)
+      setActionMessage("Driver updated.")
+      await loadDashboard()
+    })
+  }
+
+  async function handleDriverStatus(driver: Driver) {
+    const nextActiveState = !driver.isActive
+    const confirmed = nextActiveState
+      ? true
+      : window.confirm(`Deactivate driver ${driver.fullName}?`)
+
+    if (!confirmed) {
+      return
+    }
+
+    await runAction(async (token) => {
+      await updateDriverStatus(token, driver.id, nextActiveState)
+      setActionMessage(
+        nextActiveState ? "Driver reactivated." : "Driver deactivated."
+      )
       await loadDashboard()
     })
   }
@@ -616,7 +754,7 @@ export function SvcDashboardClient({
                   id="visitVehicle"
                   value={visitForm.vehicleId}
                   onChange={(value) => updateVisitForm("vehicleId", value)}
-                  options={vehicles.map((vehicle) => ({
+                  options={activeVehicles.map((vehicle) => ({
                     value: vehicle.id,
                     label: vehicle.registrationNumber,
                   }))}
@@ -626,7 +764,7 @@ export function SvcDashboardClient({
                   id="visitDriver"
                   value={visitForm.driverId}
                   onChange={(value) => updateVisitForm("driverId", value)}
-                  options={drivers.map((driver) => ({
+                  options={activeDrivers.map((driver) => ({
                     value: driver.id,
                     label: `${driver.fullName} - ${driver.phone}`,
                   }))}
@@ -740,7 +878,7 @@ export function SvcDashboardClient({
       ) : null}
 
       {showVehicleWorkflows ? (
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid gap-4 xl:grid-cols-3">
         <Card className="rounded-lg" id="vehicles">
           <CardHeader>
             <CardTitle>Add vehicle</CardTitle>
@@ -781,10 +919,101 @@ export function SvcDashboardClient({
             </form>
           </CardContent>
         </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>Edit selected vehicle</CardTitle>
+            <CardDescription>
+              Update supported vehicle fields without changing history.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {selectedVehicle ? (
+              <form
+                key={selectedVehicle.id}
+                className="grid gap-3"
+                onSubmit={handleUpdateVehicle}
+              >
+                <Field label="Vehicle" htmlFor="vehicleSelector">
+                  <Select
+                    value={selectedVehicle.id}
+                    disabled={isSubmitting}
+                    onValueChange={setSelectedVehicleId}
+                  >
+                    <SelectTrigger id="vehicleSelector" className="w-full">
+                      <SelectValue placeholder="Select vehicle" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {vehicles.map((vehicle) => (
+                        <SelectItem key={vehicle.id} value={vehicle.id}>
+                          {vehicle.registrationNumber} -{" "}
+                          {vehicle.isActive ? "Active" : "Inactive"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Registration number" htmlFor="editRegistration">
+                  <Input
+                    id="editRegistration"
+                    name="registrationNumber"
+                    defaultValue={selectedVehicle.registrationNumber}
+                    disabled={isSubmitting}
+                  />
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Vehicle name" htmlFor="editVehicleName">
+                    <Input
+                      id="editVehicleName"
+                      name="name"
+                      defaultValue={selectedVehicle.name ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="Type" htmlFor="editVehicleType">
+                    <Input
+                      id="editVehicleType"
+                      name="type"
+                      defaultValue={selectedVehicle.type ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="Capacity" htmlFor="editVehicleCapacity">
+                    <Input
+                      id="editVehicleCapacity"
+                      name="capacity"
+                      type="number"
+                      min="1"
+                      defaultValue={selectedVehicle.capacity ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                </div>
+                <Field label="Notes" htmlFor="editVehicleNotes">
+                  <Input
+                    id="editVehicleNotes"
+                    name="notes"
+                    defaultValue={selectedVehicle.notes ?? ""}
+                    disabled={isSubmitting}
+                  />
+                </Field>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  Save vehicle
+                </Button>
+              </form>
+            ) : (
+              <EmptyPanel message="Create a vehicle to enable editing." />
+            )}
+          </CardContent>
+        </Card>
+
         <ResourceCard
           id="vehicle-list"
-          title="Active vehicles"
-          emptyMessage="No active vehicles are available."
+          title="Vehicles"
+          emptyMessage="No vehicles are available."
           items={vehicles.map((vehicle) => ({
             id: vehicle.id,
             title: vehicle.registrationNumber,
@@ -793,13 +1022,36 @@ export function SvcDashboardClient({
               vehicle.capacity !== null && vehicle.capacity !== undefined
                 ? `${vehicle.capacity} seats`
                 : "Capacity not set",
+            status: vehicle.isActive ? "Active" : "Inactive",
+            actions: (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isSubmitting}
+                  onClick={() => setSelectedVehicleId(vehicle.id)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant={vehicle.isActive ? "destructive" : "outline"}
+                  size="sm"
+                  disabled={isSubmitting}
+                  onClick={() => handleVehicleStatus(vehicle)}
+                >
+                  {vehicle.isActive ? "Deactivate" : "Reactivate"}
+                </Button>
+              </>
+            ),
           }))}
         />
       </section>
       ) : null}
 
       {showDriverWorkflows ? (
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid gap-4 xl:grid-cols-3">
         <Card className="rounded-lg" id="drivers">
           <CardHeader>
             <CardTitle>Add driver</CardTitle>
@@ -831,15 +1083,119 @@ export function SvcDashboardClient({
             </form>
           </CardContent>
         </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
+            <CardTitle>Edit selected driver</CardTitle>
+            <CardDescription>
+              Update supported driver fields and keep lifecycle separate.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {selectedDriver ? (
+              <form
+                key={selectedDriver.id}
+                className="grid gap-3"
+                onSubmit={handleUpdateDriver}
+              >
+                <Field label="Driver" htmlFor="driverSelector">
+                  <Select
+                    value={selectedDriver.id}
+                    disabled={isSubmitting}
+                    onValueChange={setSelectedDriverId}
+                  >
+                    <SelectTrigger id="driverSelector" className="w-full">
+                      <SelectValue placeholder="Select driver" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {drivers.map((driver) => (
+                        <SelectItem key={driver.id} value={driver.id}>
+                          {driver.fullName} -{" "}
+                          {driver.isActive ? "Active" : "Inactive"}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Driver name" htmlFor="editDriverName">
+                    <Input
+                      id="editDriverName"
+                      name="fullName"
+                      defaultValue={selectedDriver.fullName}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="Phone" htmlFor="editDriverPhone">
+                    <Input
+                      id="editDriverPhone"
+                      name="phone"
+                      defaultValue={selectedDriver.phone}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="License number" htmlFor="editLicenseNumber">
+                    <Input
+                      id="editLicenseNumber"
+                      name="licenseNumber"
+                      defaultValue={selectedDriver.licenseNumber ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                </div>
+                <Field label="Notes" htmlFor="editDriverNotes">
+                  <Input
+                    id="editDriverNotes"
+                    name="notes"
+                    defaultValue={selectedDriver.notes ?? ""}
+                    disabled={isSubmitting}
+                  />
+                </Field>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  Save driver
+                </Button>
+              </form>
+            ) : (
+              <EmptyPanel message="Create a driver to enable editing." />
+            )}
+          </CardContent>
+        </Card>
+
         <ResourceCard
           id="driver-list"
-          title="Active drivers"
-          emptyMessage="No active drivers are available."
+          title="Drivers"
+          emptyMessage="No drivers are available."
           items={drivers.map((driver) => ({
             id: driver.id,
             title: driver.fullName,
             subtitle: driver.phone,
             meta: driver.licenseNumber ?? "License not set",
+            status: driver.isActive ? "Active" : "Inactive",
+            actions: (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isSubmitting}
+                  onClick={() => setSelectedDriverId(driver.id)}
+                >
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant={driver.isActive ? "destructive" : "outline"}
+                  size="sm"
+                  disabled={isSubmitting}
+                  onClick={() => handleDriverStatus(driver)}
+                >
+                  {driver.isActive ? "Deactivate" : "Reactivate"}
+                </Button>
+              </>
+            ),
           }))}
         />
       </section>
@@ -940,7 +1296,14 @@ function ResourceCard({
   id: string
   title: string
   emptyMessage: string
-  items: Array<{ id: string; title: string; subtitle: string; meta: string }>
+  items: Array<{
+    id: string
+    title: string
+    subtitle: string
+    meta: string
+    status?: "Active" | "Inactive"
+    actions?: ReactNode
+  }>
 }) {
   return (
     <Card className="rounded-lg" id={id}>
@@ -954,17 +1317,38 @@ function ResourceCard({
           <div className="grid gap-3 sm:grid-cols-2">
             {items.map((item) => (
               <div key={item.id} className="rounded-lg border bg-background p-4">
-                <p className="font-medium">{item.title}</p>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="font-medium">{item.title}</p>
+                  {item.status ? (
+                    <ResourceStatusBadge status={item.status} />
+                  ) : null}
+                </div>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {item.subtitle || "Details not set"}
                 </p>
                 <p className="mt-2 text-xs text-muted-foreground">{item.meta}</p>
+                {item.actions ? (
+                  <div className="mt-3 flex flex-wrap gap-2">{item.actions}</div>
+                ) : null}
               </div>
             ))}
           </div>
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function ResourceStatusBadge({ status }: { status: "Active" | "Inactive" }) {
+  const className =
+    status === "Active"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : "border-muted bg-muted/40 text-muted-foreground"
+
+  return (
+    <Badge variant="outline" className={`rounded-md ${className}`}>
+      {status}
+    </Badge>
   )
 }
 

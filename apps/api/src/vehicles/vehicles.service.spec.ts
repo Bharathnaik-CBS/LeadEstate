@@ -98,6 +98,19 @@ describe('VehiclesService', () => {
     });
   });
 
+  it('allows site visit coordinators to list active and inactive vehicles', async () => {
+    prisma.vehicle.findMany.mockResolvedValue([]);
+
+    await service.findAll(createUser(UserRole.SITE_VISIT_COORDINATOR));
+
+    expect(prisma.vehicle.findMany).toHaveBeenCalledWith({
+      where: undefined,
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+  });
+
   it('hides inactive vehicles from sales executives when fetching by id', async () => {
     prisma.vehicle.findFirst.mockResolvedValue(null);
 
@@ -108,6 +121,18 @@ describe('VehiclesService', () => {
       where: {
         id: 'vehicle-1',
         isActive: true,
+      },
+    });
+  });
+
+  it('allows site visit coordinators to fetch inactive vehicles by id', async () => {
+    prisma.vehicle.findUnique.mockResolvedValue(createVehicle({ isActive: false }));
+
+    await service.findOne('vehicle-1', createUser(UserRole.SITE_VISIT_COORDINATOR));
+
+    expect(prisma.vehicle.findUnique).toHaveBeenCalledWith({
+      where: {
+        id: 'vehicle-1',
       },
     });
   });

@@ -47,7 +47,8 @@ export class DriversService {
   findAll(user: AuthenticatedUser) {
     return this.prisma.driver.findMany({
       where:
-        user.role === UserRole.ADMIN
+        user.role === UserRole.ADMIN ||
+        user.role === UserRole.SITE_VISIT_COORDINATOR
           ? undefined
           : {
               isActive: true,
@@ -60,7 +61,8 @@ export class DriversService {
 
   async findOne(id: string, user: AuthenticatedUser) {
     const driver =
-      user.role === UserRole.ADMIN
+      user.role === UserRole.ADMIN ||
+      user.role === UserRole.SITE_VISIT_COORDINATOR
         ? await this.prisma.driver.findUnique({
             where: {
               id,

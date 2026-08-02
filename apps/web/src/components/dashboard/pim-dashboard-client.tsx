@@ -50,6 +50,7 @@ import {
   getPlotPriceHistory,
   getProjectLayout,
   getProjects,
+  updatePlot,
   updatePlotPrice,
   updatePlotStatus,
   updateProjectLayout,
@@ -60,6 +61,7 @@ import {
   type PlotPriceHistory,
   type PlotStatus,
   type Project,
+  type UpdatePlotInput,
 } from "@/lib/projects"
 
 const PLOT_STATUSES: PlotStatus[] = [
@@ -118,6 +120,9 @@ export function PimDashboardClient({
   const plots = useMemo(() => selectedProject?.plots ?? [], [selectedProject])
   const selectedPlot =
     plots.find((plot) => plot.id === selectedPlotId) ?? plots[0] ?? null
+  const selectedPlotStatusValue = selectedPlotId
+    ? statusValue
+    : selectedPlot?.status ?? statusValue
   const selectedPlotIdForDetails = selectedPlot?.id ?? ""
   const summary = useMemo(() => createInventorySummary(projects), [projects])
   const showOverview = view === "overview"
@@ -317,9 +322,37 @@ export function PimDashboardClient({
 
     await runAction(async (token) => {
       await updatePlotStatus(token, selectedProjectId, selectedPlot.id, {
-        status: statusValue,
+        status: selectedPlotStatusValue,
       })
       setActionMessage("Plot status updated.")
+      await loadProjects()
+    })
+  }
+
+  async function handleUpdatePlot(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!selectedProjectId || !selectedPlot) {
+      setError("Select a project and plot first.")
+      return
+    }
+
+    const formData = new FormData(event.currentTarget)
+    const plotNumber = getFormValue(formData, "plotNumber")
+
+    if (!plotNumber) {
+      setError("Plot number is required.")
+      return
+    }
+
+    await runAction(async (token) => {
+      const input: UpdatePlotInput = {
+        plotNumber,
+        size: getFormValue(formData, "size"),
+        facing: getFormValue(formData, "facing"),
+      }
+      await updatePlot(token, selectedProjectId, selectedPlot.id, input)
+      setActionMessage("Plot details updated.")
       await loadProjects()
     })
   }
@@ -335,6 +368,27 @@ export function PimDashboardClient({
     if (!priceValue.trim()) {
       setError("New price is required.")
       return
+    }
+
+    const nextPrice = Number(priceValue)
+    const currentPrice = Number(selectedPlot.price ?? 0)
+
+    if (!Number.isFinite(nextPrice) || nextPrice <= 0) {
+      setError("New price must be a positive value.")
+      return
+    }
+
+    if (
+      currentPrice > 0 &&
+      Math.abs(nextPrice - currentPrice) / currentPrice >= 0.1
+    ) {
+      const confirmed = window.confirm(
+        "This changes the plot price by 10% or more. Continue?"
+      )
+
+      if (!confirmed) {
+        return
+      }
     }
 
     await runAction(async (token) => {
@@ -843,6 +897,64 @@ export function PimDashboardClient({
       <section className="grid gap-4 xl:grid-cols-2">
         <Card className="rounded-lg">
           <CardHeader>
+            <CardTitle>Edit plot details</CardTitle>
+            <CardDescription>
+              Update plot number, size, and facing using the plot update API.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {selectedPlot ? (
+              <form
+                key={selectedPlot.id}
+                className="grid gap-3"
+                onSubmit={handleUpdatePlot}
+              >
+                <PlotSelector
+                  plots={plots}
+                  selectedPlot={selectedPlot}
+                  onChange={setSelectedPlotId}
+                />
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Field label="Plot number" htmlFor="editPlotNumber">
+                    <Input
+                      id="editPlotNumber"
+                      name="plotNumber"
+                      defaultValue={selectedPlot.plotNumber}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="Size / area" htmlFor="editPlotSize">
+                    <Input
+                      id="editPlotSize"
+                      name="size"
+                      defaultValue={selectedPlot.size ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                  <Field label="Facing" htmlFor="editPlotFacing">
+                    <Input
+                      id="editPlotFacing"
+                      name="facing"
+                      defaultValue={selectedPlot.facing ?? ""}
+                      disabled={isSubmitting}
+                    />
+                  </Field>
+                </div>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : null}
+                  Save plot details
+                </Button>
+              </form>
+            ) : (
+              <EmptyPanel message="Select a plot to edit details." />
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-lg">
+          <CardHeader>
             <CardTitle>Update plot status</CardTitle>
             <CardDescription>Use exact inventory status values.</CardDescription>
           </CardHeader>
@@ -860,7 +972,7 @@ export function PimDashboardClient({
                 />
                 <Field label="Status" htmlFor="statusValue">
                   <Select
-                    value={statusValue}
+                    value={selectedPlotStatusValue}
                     disabled={isSubmitting}
                     onValueChange={(value) => setStatusValue(value as PlotStatus)}
                   >
@@ -978,27 +1090,32 @@ export function PimDashboardClient({
                   <EmptyPanel message="No price history for this plot yet." />
                 ) : (
                   <div className="overflow-hidden rounded-lg border">
-                    <div className="grid grid-cols-[0.8fr_0.8fr_1fr] gap-3 bg-muted/60 px-4 py-3 text-xs font-medium text-muted-foreground">
+                    <div className="grid grid-cols-[0.8fr_0.8fr_0.9fr_0.9fr_1fr] gap-3 bg-muted/60 px-4 py-3 text-xs font-medium text-muted-foreground">
                       <span>Old</span>
                       <span>New</span>
+                      <span>Changed</span>
+                      <span>Changed by</span>
                       <span>Reason</span>
                     </div>
                     <div className="divide-y">
                       {priceHistory.slice(0, 5).map((item) => (
                         <div
                           key={item.id}
-                          className="grid grid-cols-[0.8fr_0.8fr_1fr] gap-3 px-4 py-3 text-sm"
+                          className="grid grid-cols-[0.8fr_0.8fr_0.9fr_0.9fr_1fr] gap-3 px-4 py-3 text-sm"
                         >
                           <span>{formatPrice(item.oldPrice)}</span>
                           <span className="font-medium">
                             {formatPrice(item.newPrice)}
                           </span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatLocalDateTime(item.createdAt)}
+                          </span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {item.changedById ?? "Not set"}
+                          </span>
                           <span className="min-w-0">
                             <span className="block truncate">
                               {item.reason ?? "No reason"}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatLocalDateTime(item.createdAt)}
                             </span>
                           </span>
                         </div>

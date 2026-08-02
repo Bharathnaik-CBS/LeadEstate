@@ -93,6 +93,10 @@ export type CreateDriverInput = {
   notes?: string
 }
 
+export type UpdateVehicleInput = Partial<CreateVehicleInput>
+
+export type UpdateDriverInput = Partial<CreateDriverInput>
+
 export function getSiteVisits(token: string) {
   return apiRequest<SiteVisit[]>("/site-visits", { token })
 }
@@ -148,6 +152,30 @@ export function createVehicle(token: string, input: CreateVehicleInput) {
   })
 }
 
+export function updateVehicle(
+  token: string,
+  vehicleId: string,
+  input: UpdateVehicleInput
+) {
+  return apiRequest<Vehicle>(`/vehicles/${vehicleId}`, {
+    method: "PATCH",
+    token,
+    body: cleanInput(input),
+  })
+}
+
+export function updateVehicleStatus(
+  token: string,
+  vehicleId: string,
+  isActive: boolean
+) {
+  return apiRequest<Vehicle>(`/vehicles/${vehicleId}/status`, {
+    method: "PATCH",
+    token,
+    body: { isActive },
+  })
+}
+
 export function getDrivers(token: string) {
   return apiRequest<Driver[]>("/drivers", { token })
 }
@@ -157,6 +185,30 @@ export function createDriver(token: string, input: CreateDriverInput) {
     method: "POST",
     token,
     body: cleanInput(input),
+  })
+}
+
+export function updateDriver(
+  token: string,
+  driverId: string,
+  input: UpdateDriverInput
+) {
+  return apiRequest<Driver>(`/drivers/${driverId}`, {
+    method: "PATCH",
+    token,
+    body: cleanInput(input),
+  })
+}
+
+export function updateDriverStatus(
+  token: string,
+  driverId: string,
+  isActive: boolean
+) {
+  return apiRequest<Driver>(`/drivers/${driverId}/status`, {
+    method: "PATCH",
+    token,
+    body: { isActive },
   })
 }
 

@@ -51,7 +51,8 @@ export class VehiclesService {
   findAll(user: AuthenticatedUser) {
     return this.prisma.vehicle.findMany({
       where:
-        user.role === UserRole.ADMIN
+        user.role === UserRole.ADMIN ||
+        user.role === UserRole.SITE_VISIT_COORDINATOR
           ? undefined
           : {
               isActive: true,
@@ -64,7 +65,8 @@ export class VehiclesService {
 
   async findOne(id: string, user: AuthenticatedUser) {
     const vehicle =
-      user.role === UserRole.ADMIN
+      user.role === UserRole.ADMIN ||
+      user.role === UserRole.SITE_VISIT_COORDINATOR
         ? await this.prisma.vehicle.findUnique({
             where: {
               id,
